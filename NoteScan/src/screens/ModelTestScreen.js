@@ -11,7 +11,7 @@ import {
 import * as tf from '@tensorflow/tfjs';
 import { ModelService } from '../services/ModelService';
 
-export const ModelTestScreen = ({ onNavigateToCamera, onNavigateToValidation }) => {
+export const ModelTestScreen = ({ onNavigateToCamera, onNavigateToValidation, onNavigateBack }) => {
   const [loading, setLoading] = useState(true);
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [modelDetails, setModelDetails] = useState(null);
@@ -104,10 +104,13 @@ export const ModelTestScreen = ({ onNavigateToCamera, onNavigateToValidation }) 
   return (
     <ScrollView style={styles.container}>
       <View style={styles.header}>
+        <TouchableOpacity onPress={onNavigateBack}>
+          <Text style={styles.linkText}>← Home</Text>
+        </TouchableOpacity>
         <Text style={styles.title}>Model Status</Text>
         {onNavigateToCamera && (
           <TouchableOpacity onPress={onNavigateToCamera}>
-            <Text style={styles.linkText}>← Camera</Text>
+            <Text style={styles.linkText}>Camera →</Text>
           </TouchableOpacity>
         )}
       </View>

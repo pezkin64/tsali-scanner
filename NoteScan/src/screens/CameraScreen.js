@@ -13,7 +13,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { ModelService } from '../services/ModelService';
 import { ImageProcessor } from '../utils/ImageProcessor';
 
-export const CameraScreen = ({ onNavigateToTest }) => {
+export const CameraScreen = ({ onNavigateToScore, onNavigateToTest, onNavigateBack }) => {
   const [permission, requestPermission] = useCameraPermissions();
   const [capturedImage, setCapturedImage] = useState(null);
   const [processing, setProcessing] = useState(false);
@@ -198,6 +198,12 @@ export const CameraScreen = ({ onNavigateToTest }) => {
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.button, styles.secondaryButton]}
+            onPress={() => onNavigateToScore(capturedImage.uri)}
+          >
+            <Text style={styles.buttonText}>Analyze Score</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.button, styles.secondaryButton]}
             onPress={onNavigateToTest}
           >
             <Text style={styles.buttonText}>Test Models</Text>
@@ -210,9 +216,12 @@ export const CameraScreen = ({ onNavigateToTest }) => {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
+        <TouchableOpacity onPress={onNavigateBack}>
+          <Text style={styles.linkText}>← Home</Text>
+        </TouchableOpacity>
         <Text style={styles.title}>Music Sheet Scanner</Text>
         <TouchableOpacity onPress={onNavigateToTest}>
-          <Text style={styles.linkText}>Test Models →</Text>
+          <Text style={styles.linkText}>Test →</Text>
         </TouchableOpacity>
       </View>
 
