@@ -241,9 +241,9 @@ export class AudioPlaybackService {
       const dataUrl = this.audioDataToDataURL(audioData);
 
       // Create and play sound
-      const { Sound } = await Audio.Sound.create({ uri: dataUrl });
-      AudioPlaybackService.sound = Sound;
-      await Sound.playAsync();
+      const { sound } = await Audio.Sound.createAsync({ uri: dataUrl });
+      AudioPlaybackService.sound = sound;
+      await sound.playAsync();
     } catch (error) {
       console.error('Error playing note:', error);
       throw error;

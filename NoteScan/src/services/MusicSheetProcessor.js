@@ -78,9 +78,9 @@ export class MusicSheetProcessor {
    */
   static async _loadImage(imageUri) {
     try {
-      // Resize for processing (reduce computation)
-      const resized = await manipulateAsync(imageUri, [{ resize: { width: 1024 } }], {
-        compress: 0.8,
+      // Resize for processing (small size for speed)
+      const resized = await manipulateAsync(imageUri, [{ resize: { width: 512 } }], {
+        compress: 0.7,
         format: SaveFormat.JPEG,
       });
 
@@ -186,7 +186,7 @@ export class MusicSheetProcessor {
   }
 
   /**
-   * Detect note heads using circle detection
+   * Detect note heads using circle detection with deduplication
    */
   static async _detectNoteHeads(imageTensor, staves) {
     return tf.tidy(() => {
@@ -196,23 +196,37 @@ export class MusicSheetProcessor {
 
       const noteHeads = [];
       const threshold = 100; // Dark threshold for note detection
-      const minRadius = 3;
-      const maxRadius = 12;
+      const minRadius = 2;
+      const maxRadius = 8;
+      const minDistanceBetweenNotes = 15; // Minimum pixels between note centers
+      const stepSize = 5; // Scan every 5th pixel for speed
 
-      // Scan for dark spots that could be note heads
-      for (let y = minRadius; y < height - minRadius; y++) {
-        for (let x = minRadius; x < width - minRadius; x++) {
+      console.log(`🔍 Scanning image (${width}x${height})...`);
+
+      // Scan for dark spots that could be note heads (optimized with step size)
+      for (let y = minRadius; y < height - minRadius; y += stepSize) {
+        for (let x = minRadius; x < width - minRadius; x += stepSize) {
           const idx = y * width + x;
           const pixel = data[idx];
 
           if (pixel < threshold) {
+            // Check if this point is already part of a detected note
+            const alreadyDetected = noteHeads.some(
+              (note) =>
+                Math.sqrt(Math.pow(note.x - x, 2) + Math.pow(note.y - y, 2)) <
+                minDistanceBetweenNotes
+            );
+
+            if (alreadyDetected) continue;
+
             // Check if it's a circular dark region
             let isCircle = true;
             let circleRadius = 0;
 
-            for (let r = minRadius; r <= maxRadius; r++) {
+            for (let r = minRadius; r <= maxRadius; r += 2) {
               let darkPixels = 0;
-              for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 8) {
+              // Sample only 8 points around circle for speed
+              for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 4) {
                 const cx = Math.round(x + r * Math.cos(angle));
                 const cy = Math.round(y + r * Math.sin(angle));
                 if (cx >= 0 && cx < width && cy >= 0 && cy < height) {
@@ -220,7 +234,8 @@ export class MusicSheetProcessor {
                   if (data[pidx] < threshold) darkPixels++;
                 }
               }
-              if (darkPixels > 10) {
+              if (darkPixels >= 4) {
+                // Require at least 4/8 pixels to be dark
                 circleRadius = r;
               } else {
                 break;
@@ -230,12 +245,20 @@ export class MusicSheetProcessor {
             if (circleRadius >= minRadius) {
               noteHeads.push({ x, y, radius: circleRadius });
               // Skip ahead to avoid duplicate detection
-              x += circleRadius * 2;
+              x += Math.max(circleRadius * 2, minDistanceBetweenNotes);
             }
           }
         }
       }
 
+      console.log(`📍 Detected ${noteHeads.length} note heads`);
+      
+      // Limit to reasonable number to prevent memory issues
+      if (noteHeads.length > 200) {
+        console.warn(`⚠️ Too many note heads (${noteHeads.length}), limiting to 200`);
+        return noteHeads.slice(0, 200);
+      }
+      
       return noteHeads;
     });
   }
@@ -374,10 +397,18 @@ export class MusicSheetProcessor {
       measures.push([]);
     }
 
+    // Group notes with sanity check: max 20 notes per measure
+    const maxNotesPerMeasure = 20;
+
     sortedNotes.forEach((note) => {
-      const measureIndex = Math.floor(((note.x - minX) / range) * 8);
-      if (measures[measureIndex]) {
-        measures[measureIndex].push(note);
+      const approxMeasureIndex = Math.floor(((note.x - minX) / range) * 8);
+      const targetMeasure = Math.max(
+        0,
+        Math.min(7, approxMeasureIndex)
+      );
+
+      if (measures[targetMeasure].length < maxNotesPerMeasure) {
+        measures[targetMeasure].push(note);
       }
     });
 
@@ -385,36 +416,48 @@ export class MusicSheetProcessor {
   }
 
   /**
-   * Assign notes to SATB voices
+   * Assign notes to SATB voices with deduplication
    */
   static _assignVoices(measures, staffCount) {
     const voices = ['Soprano', 'Alto', 'Tenor', 'Bass'];
     const voicedNotes = [];
-    let measureIndex = 0;
+    let noteId = 0;
 
-    measures.forEach((measure) => {
-      // Sort notes in measure by pitch (highest to lowest)
-      const sorted = measure.sort((a, b) => (b.midiNote || 0) - (a.midiNote || 0));
+    measures.forEach((measure, measureIndex) => {
+      // Remove duplicates: notes at same position with same pitch
+      const uniqueNotes = [];
+      const seen = new Set();
+
+      for (const note of measure) {
+        const key = `${note.x}-${note.y}-${note.midiNote}`;
+        if (!seen.has(key)) {
+          uniqueNotes.push(note);
+          seen.add(key);
+        }
+      }
+
+      // Sort by pitch (highest to lowest)
+      const sorted = uniqueNotes.sort(
+        (a, b) => (b.midiNote || 0) - (a.midiNote || 0)
+      );
 
       sorted.forEach((note, idx) => {
-        // Assign voice based on pitch and position in staff
+        // Assign voice based on pitch and position
         let voice = voices[Math.min(idx, voices.length - 1)];
 
         voicedNotes.push({
+          id: noteId++,
           pitch: note.pitch,
           midiNote: note.midiNote,
-          duration: note.duration,
+          duration: note.duration || 'quarter',
           voice,
           measure: measureIndex,
-          timestamp: String(
-            `${measureIndex}:${idx}:${note.duration.charAt(0)}`
-          ),
+          timestamp: String(`${measureIndex}:${idx}:${(note.duration || 'quarter').charAt(0)}`),
         });
       });
-
-      measureIndex++;
     });
 
+    console.log(`🎵 Total unique notes after dedup: ${voicedNotes.length}`);
     return voicedNotes;
   }
 }

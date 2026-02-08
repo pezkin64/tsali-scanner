@@ -18,6 +18,10 @@ export const MusicScoreScreen = ({ imageUri, onNavigateBack, onNavigateToPlaybac
 
   const voices = ['Soprano', 'Alto', 'Tenor', 'Bass'];
 
+  console.log('🎼 MusicScoreScreen received imageUri:', imageUri);
+  console.log('🎼 imageUri is truthy:', !!imageUri);
+  console.log('🎼 imageUri type:', typeof imageUri);
+
   useEffect(() => {
     if (imageUri) {
       processScore();
@@ -30,7 +34,17 @@ export const MusicScoreScreen = ({ imageUri, onNavigateBack, onNavigateToPlaybac
 
     try {
       console.log('🎼 Processing score from:', imageUri);
-      const result = await MusicSheetProcessor.processSheet(imageUri);
+      
+      // Add 30 second timeout to prevent infinite hanging
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Processing timeout - image may be too complex')), 30000)
+      );
+      
+      const result = await Promise.race([
+        MusicSheetProcessor.processSheet(imageUri),
+        timeoutPromise
+      ]);
+      
       setScoreData(result);
       console.log('✅ Score processed:', result);
     } catch (err) {
@@ -175,7 +189,7 @@ export const MusicScoreScreen = ({ imageUri, onNavigateBack, onNavigateToPlaybac
                     <Text style={styles.notePitch}>{String(note.pitch)}</Text>
                     <View style={styles.noteDetailsBox}>
                       <Text style={styles.noteDetail}>
-                        Duration: {String(note.duration)}
+                        Duration: {String(note.duration || 'quarter')}
                       </Text>
                       <Text style={styles.noteDetail}>
                         MIDI: {String(note.midiNote)}
@@ -208,7 +222,7 @@ export const MusicScoreScreen = ({ imageUri, onNavigateBack, onNavigateToPlaybac
         {/* Playback Button */}
         <TouchableOpacity
           style={styles.playbackButton}
-          onPress={() => onNavigateToPlayback(scoreData)}
+          onPress={() => onNavigateToPlayback(scoreData, imageUri)}
         >
           <Text style={styles.playbackButtonText}>🎵 Play Music</Text>
         </TouchableOpacity>

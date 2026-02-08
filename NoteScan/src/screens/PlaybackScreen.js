@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -7,8 +7,8 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
-  Slider,
 } from 'react-native';
+import Slider from '@react-native-community/slider';
 import { Audio } from 'expo-av';
 import { AudioPlaybackService } from '../services/AudioPlaybackService';
 import { PlaybackVisualization } from '../components/PlaybackVisualization';
@@ -16,13 +16,18 @@ import { PlaybackVisualization } from '../components/PlaybackVisualization';
 /**
  * Music playback screen with SATB voice selection and real-time visualization
  */
-export const PlaybackScreen = ({ scoreData, onNavigateBack }) => {
+export const PlaybackScreen = ({ scoreData, imageUri, onNavigateBack }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [tempo, setTempo] = useState(120);
   const [currentNote, setCurrentNote] = useState(null);
   const [playbackPosition, setPlaybackPosition] = useState(0);
   const [totalDuration, setTotalDuration] = useState(0);
   const [preparing, setPreparing] = useState(false);
+  
+  console.log('PlaybackScreen received imageUri:', imageUri);
+  
+  const playbackIntervalRef = useRef(null);
+  const shouldStopRef = useRef(false);
 
   const voices = {
     Soprano: true,
@@ -77,7 +82,12 @@ export const PlaybackScreen = ({ scoreData, onNavigateBack }) => {
   };
 
   const cleanup = async () => {
+    shouldStopRef.current = true;
     setIsPlaying(false);
+    if (playbackIntervalRef.current) {
+      clearInterval(playbackIntervalRef.current);
+      playbackIntervalRef.current = null;
+    }
     await AudioPlaybackService.stopPlayback();
   };
 
@@ -89,23 +99,23 @@ export const PlaybackScreen = ({ scoreData, onNavigateBack }) => {
 
     try {
       setIsPlaying(true);
+      shouldStopRef.current = false;
+      
       const startTime = Date.now();
       const startPosition = playbackPosition;
 
-      // Simple playback loop
-      const playbackInterval = setInterval(async () => {
+      // Track playback position with interval
+      playbackIntervalRef.current = setInterval(() => {
         const elapsed = (Date.now() - startTime) / 1000;
         const newPosition = startPosition + elapsed;
 
-        setPlaybackPosition(newPosition);
-
-        // Check if we've reached the end
         if (newPosition >= totalDuration) {
           setPlaybackPosition(totalDuration);
-          setIsPlaying(false);
-          clearInterval(playbackInterval);
+          cleanup();
           return;
         }
+
+        setPlaybackPosition(newPosition);
 
         // Find current note
         let currentNoteData = null;
@@ -121,51 +131,66 @@ export const PlaybackScreen = ({ scoreData, onNavigateBack }) => {
         setCurrentNote(currentNoteData);
       }, 50); // Update every 50ms
 
-      // Actually play the audio
-      // For now, we'll sequentially play each note segment
-      for (const segment of audioSequence.segments) {
-        if (!isPlaying) break;
+      // Play audio segments sequentially
+      for (let i = 0; i < audioSequence.segments.length; i++) {
+        if (shouldStopRef.current) break;
+        
+        const segment = audioSequence.segments[i];
 
         // Wait until it's time to play this segment
-        const delay = Math.max(0, segment.time * 1000 - playbackPosition * 1000);
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        const delay = Math.max(0, (segment.time - startPosition) * 1000 - (Date.now() - startTime));
+        
+        if (delay > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
 
-        if (!isPlaying) break;
+        if (shouldStopRef.current) break;
 
         // Play the note
         try {
-          const { Sound } = await Audio.Sound.create({
+          const { sound } = await Audio.Sound.createAsync({
             uri: AudioPlaybackService.audioDataToDataURL(segment.audio),
           });
-          const sound = Sound;
+          
           await sound.playAsync();
-          setTimeout(
-            () => {
-              sound.unloadAsync();
-            },
-            segment.duration * 1000
-          );
+          
+          // Clean up after playing
+          setTimeout(() => {
+            sound.unloadAsync().catch(() => {});
+          }, segment.duration * 1000);
+          
         } catch (e) {
           console.warn('Could not play segment:', e);
         }
       }
+      
+      // Wait for the last segment to finish
+      if (!shouldStopRef.current) {
+        const remainingTime = (totalDuration - (Date.now() - startTime) / 1000) * 1000;
+        if (remainingTime > 0) {
+          await new Promise((resolve) => setTimeout(resolve, remainingTime));
+        }
+      }
+      
+      if (!shouldStopRef.current) {
+        cleanup();
+      }
+      
     } catch (error) {
       console.error('Playback error:', error);
       Alert.alert('Playback Error', error.message);
-      setIsPlaying(false);
+      cleanup();
     }
   };
 
   const handlePause = async () => {
-    setIsPlaying(false);
-    await AudioPlaybackService.stopPlayback();
+    cleanup();
   };
 
   const handleStop = async () => {
-    setIsPlaying(false);
+    await cleanup();
     setPlaybackPosition(0);
     setCurrentNote(null);
-    await AudioPlaybackService.stopPlayback();
   };
 
   const toggleVoice = (voice) => {
@@ -329,14 +354,19 @@ export const PlaybackScreen = ({ scoreData, onNavigateBack }) => {
 
         {/* Visualization */}
         {audioSequence && (
-          <PlaybackVisualization
-            scoreData={scoreData}
-            isPlaying={isPlaying}
-            currentTime={playbackPosition}
-            totalDuration={totalDuration}
-            selectedVoices={voiceSelection}
-            tempo={tempo}
-          />
+          <>
+            {console.log('🎬 PlaybackScreen rendering PlaybackVisualization with imageUri:', imageUri)}
+            <PlaybackVisualization
+              scoreData={scoreData}
+              imageUri={imageUri}
+              isPlaying={isPlaying}
+              currentTime={playbackPosition}
+              totalDuration={totalDuration}
+              selectedVoices={voiceSelection}
+              tempo={tempo}
+              audioSequence={audioSequence}
+            />
+          </>
         )}
 
         {/* Score Summary */}
@@ -359,9 +389,6 @@ export const PlaybackScreen = ({ scoreData, onNavigateBack }) => {
     </View>
   );
 };
-
-// Import Audio from expo-av at the top
-import { Audio } from 'expo-av';
 
 const styles = StyleSheet.create({
   container: {

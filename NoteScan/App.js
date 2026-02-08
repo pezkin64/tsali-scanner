@@ -18,6 +18,7 @@ export default function App() {
   const [currentScreen, setCurrentScreen] = useState('home'); // 'home', 'camera', 'upload-image', 'upload-file', 'settings', 'test', 'validation', 'score', 'playback'
   const [scoreImageUri, setScoreImageUri] = useState(null);
   const [scoreData, setScoreData] = useState(null);
+  const [playbackImageUri, setPlaybackImageUri] = useState(null);
 
   useEffect(() => {
     const initApp = async () => {
@@ -95,14 +96,20 @@ export default function App() {
         <MusicScoreScreen 
           imageUri={scoreImageUri}
           onNavigateBack={() => setCurrentScreen('home')}
-          onNavigateToPlayback={(data) => {
+          onNavigateToPlayback={(data, imageUri) => {
+            console.log('📱 App.js: onNavigateToPlayback called');
+            console.log('📱 App.js: Received data:', data?.notes?.length, 'notes');
+            console.log('📱 App.js: Received imageUri:', imageUri);
+            console.log('📱 App.js: imageUri is truthy:', !!imageUri);
             setScoreData(data);
+            setPlaybackImageUri(imageUri);
             setCurrentScreen('playback');
           }}
         />
       ) : currentScreen === 'playback' ? (
         <PlaybackScreen 
           scoreData={scoreData}
+          imageUri={playbackImageUri}
           onNavigateBack={() => setCurrentScreen('score')}
         />
       ) : currentScreen === 'upload-image' ? (

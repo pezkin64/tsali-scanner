@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -7,62 +7,69 @@ import {
   TouchableOpacity,
   Animated,
   Dimensions,
+  Image,
 } from 'react-native';
 
 /**
  * Real-time visualization component for music playback
- * Shows notes being played, measure progress, and tempo indicator
+ * Shows sheet image with playback cursor bar
  */
 export const PlaybackVisualization = ({
   scoreData,
+  imageUri,
   isPlaying,
   currentTime,
   totalDuration,
   selectedVoices,
   tempo,
+  audioSequence,
 }) => {
   const [animatedValue] = useState(new Animated.Value(0));
+  const scrollViewRef = useRef(null);
+  const [imageWidth, setImageWidth] = useState(0);
+  const [viewportWidth, setViewportWidth] = useState(0);
   const screenWidth = Dimensions.get('window').width;
-  const noteGridWidth = screenWidth - 32;
 
-  // Get notes ordered by time
-  const filteredNotes = scoreData.notes.filter((note) => selectedVoices[note.voice]);
+  console.log('PlaybackVisualization received imageUri:', imageUri);
+  console.log('Image URI type:', typeof imageUri);
+  console.log('Image URI is truthy:', !!imageUri);
+  console.log('Image URI length:', imageUri?.length);
 
-  // Calculate timing for each note
-  const notesWithTiming = filteredNotes.map((note) => {
-    const beatDuration = {
-      whole: 4,
-      half: 2,
-      quarter: 1,
-      eighth: 0.5,
-    }[note.duration] || 1;
+  // Calculate progress and snapping
+  const progressRatio = totalDuration > 0 ? currentTime / totalDuration : 0;
+  const progressPercent = progressRatio * 100;
 
-    const secondsPerBeat = 60 / tempo;
-    const noteDuration = beatDuration * secondsPerBeat;
+  const snappedTime = (() => {
+    if (!audioSequence || !audioSequence.segments || audioSequence.segments.length === 0) {
+      return currentTime;
+    }
+    let snapped = 0;
+    for (const segment of audioSequence.segments) {
+      if (currentTime < segment.time) break;
+      snapped = segment.time;
+    }
+    return snapped;
+  })();
+  const snappedRatio = totalDuration > 0 ? snappedTime / totalDuration : 0;
 
-    return {
-      ...note,
-      duration: noteDuration,
-    };
-  });
+  // Playback cursor position on image
+  const cursorX = imageWidth > 0 ? imageWidth * snappedRatio : 0;
 
-  // Sort by measure and position
-  const sortedNotes = notesWithTiming.sort((a, b) => {
-    if (a.measure !== b.measure) return a.measure - b.measure;
-    return a.midiNote - b.midiNote;
-  });
+  // Auto-scroll to keep cursor visible
+  useEffect(() => {
+    if (!isPlaying || !scrollViewRef.current || imageWidth <= 0 || viewportWidth <= 0) {
+      return;
+    }
 
-  // Find current playing notes
-  const currentNotes = sortedNotes.filter((note) => {
-    const noteTime = note.measure * 4 * (60 / tempo); // Approximate timing
-    return Math.abs(currentTime - noteTime) < 0.5;
-  });
-
-  // Get current measure
-  const currentMeasure = Math.floor(currentTime / (4 * (60 / tempo)));
-
-  // Calculate progress
-  const progressPercent = (currentTime / totalDuration) * 100;
+    const targetX = Math.max(
+      0,
+      Math.min(
+        imageWidth - viewportWidth,
+        cursorX - viewportWidth * 0.3
+      )
+    );
+    scrollViewRef.current.scrollTo({ x: targetX, animated: true });
+  }, [isPlaying, cursorX, imageWidth, viewportWidth]);
 
   // Tempo indicator animation
   useEffect(() => {
@@ -71,7 +78,7 @@ export const PlaybackVisualization = ({
         Animated.sequence([
           Animated.timing(animatedValue, {
             toValue: 1,
-            duration: (60 / tempo) * 1000, // Duration of one beat
+            duration: (60 / tempo) * 1000,
             useNativeDriver: false,
           }),
           Animated.timing(animatedValue, {
@@ -125,82 +132,55 @@ export const PlaybackVisualization = ({
           />
         </View>
         <Text style={styles.progressText}>
-          M{String(currentMeasure + 1)}
+          {String(Math.floor(currentTime))}s / {String(Math.floor(totalDuration))}s
         </Text>
       </View>
 
       {/* Notes Visualization Grid */}
-      <View style={styles.notesVisualization}>
-        <Text style={styles.vizTitle}>🎵 Notes</Text>
-
-        {/* Measure Sections */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={true}
-          scrollEventThrottle={16}
-        >
-          <View style={styles.measuresContainer}>
-            {scoreData.measures.map((measure, measureIdx) => {
-              const measureNotes = sortedNotes.filter(
-                (n) => n.measure === measureIdx
-              );
-              const isCurrentMeasure = measureIdx === currentMeasure;
-
-              return (
-                <View
-                  key={measureIdx}
-                  style={[
-                    styles.measureBox,
-                    isCurrentMeasure && styles.measureBoxActive,
-                  ]}
-                >
-                  <Text style={styles.measureNumber}>
-                    M{String(measureIdx + 1)}
-                  </Text>
-
-                  {/* Notes in this measure */}
-                  <View style={styles.notesInMeasure}>
-                    {measureNotes.map((note, noteIdx) => {
-                      const isPlaying =
-                        currentNotes.some((n) => n.midiNote === note.midiNote);
-
-                      return (
-                        <View
-                          key={noteIdx}
-                          style={[
-                            styles.noteItem,
-                            isPlaying && styles.noteItemPlaying,
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.noteItemPitch,
-                              isPlaying && styles.noteItemPitchPlaying,
-                            ]}
-                          >
-                            {String(note.pitch)}
-                          </Text>
-                          <Text style={styles.noteItemVoice}>
-                            {String(note.voice.charAt(0))}
-                          </Text>
-                          <Text style={styles.noteItemDuration}>
-                            {String(
-                              note.duration.charAt(0).toUpperCase()
-                            )}
-                          </Text>
-                        </View>
-                      );
-                    })}
-
-                    {measureNotes.length === 0 && (
-                      <Text style={styles.emptyMeasure}>-</Text>
-                    )}
-                  </View>
-                </View>
-              );
-            })}
+      <View style={styles.sheetContainer}>
+        <Text style={styles.vizTitle}>🎵 Sheet Music</Text>
+        
+        {imageUri && imageUri.trim() !== '' ? (
+          <ScrollView
+            ref={scrollViewRef}
+            horizontal
+            showsHorizontalScrollIndicator={true}
+            scrollEventThrottle={16}
+            onLayout={(event) => {
+              setViewportWidth(event.nativeEvent.layout.width);
+            }}
+          >
+            <View style={styles.imageWrapper}>
+              <Image
+                source={{ uri: imageUri }}
+                style={styles.sheetImage}
+                onLoad={(event) => {
+                  console.log('Image loaded successfully');
+                  const { width, height } = event.nativeEvent.source;
+                  console.log('Image dimensions:', width, 'x', height);
+                  setImageWidth(width);
+                }}
+                onError={(error) => {
+                  console.error('Image failed to load:', error);
+                }}
+                resizeMode="contain"
+              />
+              <View
+                style={[
+                  styles.playbackCursor,
+                  { left: cursorX },
+                ]}
+              />
+            </View>
+          </ScrollView>
+        ) : (
+          <View style={styles.noImageContainer}>
+            <Text style={styles.noImageText}>⚠️ No sheet image available</Text>
+            <Text style={styles.debugText}>imageUri: {imageUri ? 'present' : 'undefined'}</Text>
+            <Text style={styles.debugText}>imageUri type: {typeof imageUri}</Text>
+            {imageUri && <Text style={styles.debugText} numberOfLines={3}>Value: {imageUri.substring(0, 100)}...</Text>}
           </View>
-        </ScrollView>
+        )}
       </View>
 
       {/* Voice Status */}
@@ -235,21 +215,21 @@ export const PlaybackVisualization = ({
       {/* Performance Stats */}
       <View style={styles.statsContainer}>
         <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Measures</Text>
-          <Text style={styles.statValue}>
-            {String(currentMeasure + 1)} / {String(scoreData.measures.length)}
-          </Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Notes Left</Text>
-          <Text style={styles.statValue}>
-            {String(Math.max(0, filteredNotes.length - currentNotes.length))}
-          </Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Completion</Text>
+          <Text style={styles.statLabel}>Progress</Text>
           <Text style={styles.statValue}>
             {String(Math.round(progressPercent))}%
+          </Text>
+        </View>
+        <View style={styles.statCard}>
+          <Text style={styles.statLabel}>Time</Text>
+          <Text style={styles.statValue}>
+            {String(Math.floor(currentTime))}s / {String(Math.floor(totalDuration))}s
+          </Text>
+        </View>
+        <View style={styles.statCard}>
+          <Text style={styles.statLabel}>Notes</Text>
+          <Text style={styles.statValue}>
+            {String(scoreData.notes.length)}
           </Text>
         </View>
       </View>
@@ -312,7 +292,7 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
   },
-  notesVisualization: {
+  sheetContainer: {
     marginBottom: 16,
     backgroundColor: '#fff',
     borderRadius: 8,
@@ -324,73 +304,51 @@ const styles = StyleSheet.create({
     color: '#333',
     marginBottom: 12,
   },
-  measuresContainer: {
-    flexDirection: 'row',
-    gap: 8,
+  imageWrapper: {
+    position: 'relative',
   },
-  measureBox: {
-    minWidth: 80,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderWidth: 2,
-    borderColor: '#ddd',
-    borderRadius: 6,
-    backgroundColor: '#fafafa',
+  sheetImage: {
+    width: '100%',
+    height: 400,
+  },
+  playbackCursor: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: 4,
+    backgroundColor: '#7B4DFF',
+    borderRadius: 2,
+    opacity: 0.9,
+    zIndex: 10,
+  },
+  playbackBar: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: 4,
+    backgroundColor: '#7B4DFF',
+    borderRadius: 2,
+    opacity: 0.85,
+    zIndex: 2,
+  },
+  noImageContainer: {
+    height: 200,
+    justifyContent: 'center',
     alignItems: 'center',
-  },
-  measureBoxActive: {
-    borderColor: '#2196F3',
-    backgroundColor: '#E3F2FD',
-  },
-  measureNumber: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#666',
-    marginBottom: 8,
-  },
-  notesInMeasure: {
-    alignItems: 'center',
-    gap: 4,
-  },
-  noteItem: {
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 4,
-    backgroundColor: '#fff',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#ddd',
-    alignItems: 'center',
+    borderColor: '#e0e0e0',
   },
-  noteItemPlaying: {
-    backgroundColor: '#FFE082',
-    borderColor: '#FF9800',
-    shadowColor: '#FF9800',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  noteItemPitch: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  noteItemPitchPlaying: {
-    color: '#E65100',
-  },
-  noteItemVoice: {
-    fontSize: 10,
-    color: '#999',
-    marginTop: 2,
-  },
-  noteItemDuration: {
-    fontSize: 9,
-    color: '#bbb',
-  },
-  emptyMeasure: {
+  noImageText: {
     fontSize: 14,
-    color: '#ddd',
-    fontWeight: 'bold',
+    color: '#999',
+  },
+  debugText: {
+    fontSize: 11,
+    color: '#666',
+    marginTop: 4,
+    fontFamily: 'monospace',
   },
   voiceStatusContainer: {
     marginBottom: 16,
