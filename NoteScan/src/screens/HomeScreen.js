@@ -4,97 +4,99 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  ScrollView,
   StatusBar,
 } from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import { SvgXml } from 'react-native-svg';
 
-export const HomeScreen = ({ onNavigate }) => {
+const logoXml = `
+<svg width="160" height="120" viewBox="0 0 160 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M12 60C30 32 58 20 88 20C118 20 146 32 164 60C146 88 118 100 88 100C58 100 30 88 12 60Z" fill="#F1EEE4" stroke="#3E3C37" stroke-width="3"/>
+  <circle cx="78" cy="60" r="9" fill="#3E3C37"/>
+  <path d="M108 40V76C108 80.9 104 84.9 99.1 84.9C94.2 84.9 90.2 80.9 90.2 76C90.2 71.1 94.2 67.1 99.1 67.1C100.8 67.1 102.4 67.5 103.8 68.2V40H108Z" fill="#3E3C37"/>
+</svg>
+`;
+
+export const HomeScreen = ({ onNavigate, onPickFromGallery, onPickFromCamera }) => {
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#1976D2" />
-      
+      <StatusBar barStyle="dark-content" backgroundColor="#F9F7F1" />
+
       <View style={styles.header}>
-        <Text style={styles.title}>🎵 Music Scanner</Text>
-        <Text style={styles.subtitle}>Scan, Play, and Enjoy Sheet Music</Text>
+        <View style={styles.headerTop}>
+          <Text style={styles.title}>Music Eye</Text>
+          <SvgXml xml={logoXml} width={72} height={48} />
+        </View>
+        <Text style={styles.subtitle}>Scan and play sheet music in seconds</Text>
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
+      <View style={styles.content}>
         <View style={styles.buttonContainer}>
           {/* Scan from Camera */}
           <TouchableOpacity
-            style={[styles.actionButton, styles.primaryButton]}
-            onPress={() => onNavigate('camera')}
+            style={styles.actionButton}
+            onPress={onPickFromCamera}
           >
-            <Text style={styles.buttonIcon}>📷</Text>
+            <View style={styles.buttonIconWrap}>
+              <Feather name="camera" size={20} color="#3E3C37" />
+            </View>
             <Text style={styles.buttonTitle}>Scan from Camera</Text>
-            <Text style={styles.buttonDescription}>
-              Take a photo of sheet music
-            </Text>
           </TouchableOpacity>
 
           {/* Upload Image */}
           <TouchableOpacity
-            style={[styles.actionButton, styles.secondaryButton]}
-            onPress={() => onNavigate('upload-image')}
+            style={styles.actionButton}
+            onPress={onPickFromGallery}
           >
-            <Text style={styles.buttonIcon}>🖼️</Text>
-            <Text style={styles.buttonTitle}>Upload Image</Text>
-            <Text style={styles.buttonDescription}>
-              Select an image from gallery
-            </Text>
+            <View style={styles.buttonIconWrap}>
+              <Feather name="image" size={20} color="#3E3C37" />
+            </View>
+            <Text style={styles.buttonTitle}>Scan from Photos</Text>
           </TouchableOpacity>
 
           {/* Upload PDF/Files */}
           <TouchableOpacity
-            style={[styles.actionButton, styles.secondaryButton]}
+            style={styles.actionButton}
             onPress={() => onNavigate('upload-file')}
           >
-            <Text style={styles.buttonIcon}>📄</Text>
-            <Text style={styles.buttonTitle}>Upload Files</Text>
-            <Text style={styles.buttonDescription}>
-              Import PDF or multiple images
-            </Text>
+            <View style={styles.buttonIconWrap}>
+              <Feather name="download" size={20} color="#3E3C37" />
+            </View>
+            <Text style={styles.buttonTitle}>Scan from Files</Text>
           </TouchableOpacity>
 
-          {/* Recent Scans / Settings */}
+          {/* Browse Scanned Music */}
           <TouchableOpacity
-            style={[styles.actionButton, styles.tertiaryButton]}
+            style={styles.actionButton}
+            onPress={() => onNavigate('library')}
+          >
+            <View style={styles.buttonIconWrap}>
+              <Feather name="music" size={20} color="#3E3C37" />
+            </View>
+            <Text style={styles.buttonTitle}>Browse Scanned Music</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Footer Actions */}
+      <View style={styles.footerContainer}>
+        <View style={styles.footer}>
+          <TouchableOpacity
+            style={styles.footerAction}
             onPress={() => onNavigate('settings')}
           >
-            <Text style={styles.buttonIcon}>⚙️</Text>
-            <Text style={styles.buttonTitle}>Settings</Text>
-            <Text style={styles.buttonDescription}>
-              App preferences and help
-            </Text>
+            <Feather name="settings" size={20} color="#3E3C37" />
+            <Text style={styles.footerText}>Settings</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.footerAction}
+            onPress={() => onNavigate('help')}
+          >
+            <Feather name="help-circle" size={20} color="#3E3C37" />
+            <Text style={styles.footerText}>Help</Text>
           </TouchableOpacity>
         </View>
-
-        {/* Developer Tools Section */}
-        <View style={styles.devSection}>
-          <Text style={styles.devTitle}>Developer Tools</Text>
-          <View style={styles.devButtons}>
-            <TouchableOpacity
-              style={styles.devButton}
-              onPress={() => onNavigate('test')}
-            >
-              <Text style={styles.devButtonText}>Test Models</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.devButton}
-              onPress={() => onNavigate('validation')}
-            >
-              <Text style={styles.devButtonText}>Validation</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Info Footer */}
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>
-            Powered by TensorFlow.js & React Native
-          </Text>
-        </View>
-      </ScrollView>
+      </View>
     </View>
   );
 };
@@ -102,107 +104,86 @@ export const HomeScreen = ({ onNavigate }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#F9F7F1',
   },
   header: {
-    backgroundColor: '#1976D2',
-    paddingTop: 60,
-    paddingBottom: 40,
-    paddingHorizontal: 20,
+    paddingTop: 72,
+    paddingBottom: 28,
+    paddingHorizontal: 24,
+    gap: 8,
+  },
+  headerTop: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
   },
   title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 8,
+    fontSize: 36,
+    lineHeight: 40,
+    fontWeight: '800',
+    color: '#3E3C37',
+    letterSpacing: -0.5,
   },
   subtitle: {
-    fontSize: 16,
-    color: '#E3F2FD',
+    fontSize: 14,
+    color: '#6E675E',
+    letterSpacing: 0.2,
   },
   content: {
     flex: 1,
-  },
-  contentContainer: {
-    padding: 20,
+    paddingHorizontal: 24,
+    paddingBottom: 20,
   },
   buttonContainer: {
-    marginBottom: 32,
-  },
-  actionButton: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 24,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 5,
-    alignItems: 'center',
-  },
-  primaryButton: {
-    backgroundColor: '#2196F3',
-  },
-  secondaryButton: {
-    backgroundColor: '#fff',
-    borderWidth: 2,
-    borderColor: '#2196F3',
-  },
-  tertiaryButton: {
-    backgroundColor: '#fff',
-  },
-  buttonIcon: {
-    fontSize: 48,
-    marginBottom: 12,
-  },
-  buttonTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#333',
-    marginBottom: 6,
-  },
-  buttonDescription: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-  },
-  devSection: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 20,
-  },
-  devTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#666',
-    marginBottom: 12,
-    textTransform: 'uppercase',
-  },
-  devButtons: {
-    flexDirection: 'row',
+    marginTop: 8,
+    marginBottom: 28,
     gap: 12,
   },
-  devButton: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-    padding: 12,
-    borderRadius: 8,
+  actionButton: {
+    backgroundColor: '#FBFAF5',
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: '#D6D0C4',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
   },
-  devButtonText: {
-    fontSize: 13,
-    color: '#2196F3',
-    fontWeight: '600',
+  buttonIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#D6D0C4',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F1EEE4',
+  },
+  buttonTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#3E3C37',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  footerContainer: {
+    paddingHorizontal: 24,
+    paddingBottom: 24,
+    paddingTop: 8,
   },
   footer: {
-    paddingVertical: 20,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  footerAction: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 8,
   },
   footerText: {
-    fontSize: 12,
-    color: '#999',
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#5C574E',
   },
 });

@@ -1,8 +1,6 @@
 import * as tf from '@tensorflow/tfjs';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { decodeJpeg } from '@tensorflow/tfjs-react-native';
-import * as FileSystem from 'expo-file-system';
-
 export class ImageProcessor {
   /**
    * Preprocess image for OCR model (24x24 grayscale)

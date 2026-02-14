@@ -28,7 +28,8 @@
     "react": "latest",
     "react-native": "latest",
     "react-native-fs": "^2.20.0",
-    "react-native-gesture-handler": "latest"
+    "react-native-gesture-handler": "latest",
+    "react-native-svg": "^15.15.3"
   },
   "devDependencies": {
     "@babel/core": "^7.24.0",

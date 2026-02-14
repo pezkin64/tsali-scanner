@@ -9,8 +9,19 @@ import {
   ActivityIndicator,
   FlatList,
   Alert,
+  Platform,
+  StatusBar,
 } from 'react-native';
 import { ValidationService } from '../services/ValidationService';
+
+const palette = {
+  background: '#F9F7F1',
+  surface: '#FBFAF5',
+  surfaceStrong: '#F1EEE4',
+  border: '#D6D0C4',
+  ink: '#3E3C37',
+  inkMuted: '#6E675E',
+};
 
 export const ValidationScreen = ({ onNavigateBack }) => {
   const [mode, setMode] = useState('setSelection'); // 'setSelection', 'setDetails', 'sheetView'
@@ -115,6 +126,7 @@ export const ValidationScreen = ({ onNavigateBack }) => {
   if (mode === 'setSelection') {
     return (
       <ScrollView style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor={palette.background} />
         <View style={styles.header}>
           <Text style={styles.title}>Validation</Text>
           <TouchableOpacity onPress={onNavigateBack}>
@@ -144,6 +156,7 @@ export const ValidationScreen = ({ onNavigateBack }) => {
   if (mode === 'setDetails') {
     return (
       <ScrollView style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor={palette.background} />
         <View style={styles.header}>
           <Text style={styles.title}>{selectedSet?.name}</Text>
           <TouchableOpacity onPress={() => setMode('setSelection')}>
@@ -202,6 +215,7 @@ export const ValidationScreen = ({ onNavigateBack }) => {
 
   return (
     <ScrollView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor={palette.background} />
       <View style={styles.header}>
         <Text style={styles.title}>
           Sheet {String(currentSheetIndex + 1)}/{String(sheets.length)}
@@ -271,7 +285,7 @@ export const ValidationScreen = ({ onNavigateBack }) => {
 
         {loading && (
           <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#2196F3" />
+            <ActivityIndicator size="large" color={palette.ink} />
             <Text style={styles.loadingText}>Processing...</Text>
           </View>
         )}
@@ -311,145 +325,157 @@ export const ValidationScreen = ({ onNavigateBack }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: palette.background,
   },
   header: {
-    backgroundColor: '#2196F3',
-    padding: 16,
+    paddingHorizontal: 24,
+    paddingBottom: 20,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 32 : 72,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    backgroundColor: palette.background,
   },
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
+    fontSize: 28,
+    fontWeight: '800',
+    color: palette.ink,
+    letterSpacing: -0.4,
   },
   linkText: {
     fontSize: 14,
-    color: '#fff',
-    textDecorationLine: 'underline',
+    color: palette.inkMuted,
+    fontWeight: '600',
   },
   content: {
-    padding: 16,
+    padding: 20,
   },
   subtitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
+    fontSize: 16,
+    fontWeight: '700',
+    color: palette.ink,
     marginBottom: 16,
   },
   setCard: {
-    backgroundColor: '#fff',
+    backgroundColor: palette.surface,
     padding: 16,
-    borderRadius: 8,
+    borderRadius: 14,
     marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    borderWidth: 2,
+    borderColor: palette.border,
   },
   setName: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#2196F3',
+    fontWeight: '700',
+    color: palette.ink,
     marginBottom: 4,
   },
   setCount: {
     fontSize: 14,
-    color: '#666',
+    color: palette.inkMuted,
   },
   infoCard: {
-    backgroundColor: '#e3f2fd',
+    backgroundColor: palette.surfaceStrong,
     padding: 16,
-    borderRadius: 8,
+    borderRadius: 14,
     marginBottom: 16,
+    borderWidth: 2,
+    borderColor: palette.border,
   },
   infoLabel: {
     fontSize: 14,
-    color: '#666',
+    color: palette.inkMuted,
   },
   infoValue: {
     fontSize: 24,
-    fontWeight: 'bold',
-    color: '#2196F3',
+    fontWeight: '800',
+    color: palette.ink,
     marginTop: 8,
   },
   statsCard: {
-    backgroundColor: '#fff',
+    backgroundColor: palette.surface,
     padding: 16,
-    borderRadius: 8,
+    borderRadius: 14,
     marginBottom: 16,
+    borderWidth: 2,
+    borderColor: palette.border,
   },
   statsTitle: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
+    fontWeight: '700',
+    color: palette.ink,
     marginBottom: 12,
   },
   statLine: {
     fontSize: 14,
-    color: '#666',
+    color: palette.inkMuted,
     marginBottom: 6,
   },
   button: {
-    backgroundColor: '#4caf50',
-    padding: 16,
-    borderRadius: 8,
+    backgroundColor: palette.surface,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: palette.border,
     alignItems: 'center',
     marginBottom: 12,
   },
   secondaryButton: {
-    backgroundColor: '#2196F3',
+    backgroundColor: palette.surface,
   },
   buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+    color: palette.ink,
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   sheetContainer: {
-    padding: 16,
+    padding: 20,
   },
   imageSection: {
     marginBottom: 24,
   },
   sectionLabel: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#666',
+    fontWeight: '700',
+    color: palette.ink,
     marginBottom: 8,
   },
   sheetImage: {
     width: '100%',
     height: 300,
     backgroundColor: '#000',
-    borderRadius: 8,
+    borderRadius: 12,
   },
   predictionsSection: {
     marginBottom: 24,
   },
   predictionCard: {
-    backgroundColor: '#fff',
+    backgroundColor: palette.surface,
     padding: 12,
-    borderRadius: 8,
+    borderRadius: 12,
     marginBottom: 12,
+    borderWidth: 2,
+    borderColor: palette.border,
   },
   predictionTitle: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#2196F3',
+    fontWeight: '700',
+    color: palette.ink,
     marginBottom: 6,
   },
   predictionText: {
     fontSize: 13,
-    color: '#555',
+    color: palette.inkMuted,
     marginBottom: 4,
   },
   processButton: {
-    backgroundColor: '#4caf50',
-    padding: 16,
-    borderRadius: 8,
+    backgroundColor: palette.surface,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: palette.border,
     alignItems: 'center',
   },
   loadingContainer: {
@@ -459,27 +485,31 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: 16,
     fontSize: 16,
-    color: '#666',
+    color: palette.inkMuted,
   },
   navContainer: {
     flexDirection: 'row',
-    padding: 16,
+    padding: 20,
     gap: 12,
   },
   navButton: {
     flex: 1,
-    backgroundColor: '#2196F3',
+    backgroundColor: palette.surface,
     padding: 12,
-    borderRadius: 8,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: palette.border,
     alignItems: 'center',
   },
   disabledButton: {
-    backgroundColor: '#ccc',
+    backgroundColor: palette.surface,
     opacity: 0.5,
   },
   navButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
+    color: palette.ink,
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
 });

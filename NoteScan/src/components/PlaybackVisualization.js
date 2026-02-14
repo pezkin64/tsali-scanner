@@ -1,417 +1,410 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Animated,
   Dimensions,
   Image,
+  ScrollView,
+  Pressable,
+  Animated,
 } from 'react-native';
 
+const ACCENT = '#E05A2A';
+const ACCENT_LIGHT = 'rgba(224, 90, 42, 0.18)';
+const ACCENT_GLOW = 'rgba(224, 90, 42, 0.35)';
+const BAR_HEIGHT = 6;
+
 /**
- * Real-time visualization component for music playback
- * Shows sheet image with playback cursor bar
+ * Score viewer with:
+ *  - Orange vertical cursor bar that snaps note-by-note
+ *  - Orange horizontal progress bar (scrubber) at the top
+ *  - Note-position highlights during playback
+ *  - Tap-to-seek: tap anywhere on the sheet or progress bar to jump
+ *  - Auto-scroll to keep the active system visible
  */
 export const PlaybackVisualization = ({
-  scoreData,
   imageUri,
-  isPlaying,
   currentTime,
   totalDuration,
-  selectedVoices,
-  tempo,
-  audioSequence,
+  isPlaying,
+  cursorInfo,
+  onSeek, // (timeSeconds: number) => void
+  // cursorInfo = { positions, systemBounds, imageWidth, imageHeight, xRange }
 }) => {
-  const [animatedValue] = useState(new Animated.Value(0));
   const scrollViewRef = useRef(null);
-  const [imageWidth, setImageWidth] = useState(0);
-  const [viewportWidth, setViewportWidth] = useState(0);
-  const screenWidth = Dimensions.get('window').width;
+  const [containerWidth, setContainerWidth] = useState(0);
+  const [containerHeight, setContainerHeight] = useState(0);
+  const [imageNaturalWidth, setImageNaturalWidth] = useState(0);
+  const [imageNaturalHeight, setImageNaturalHeight] = useState(0);
 
-  console.log('PlaybackVisualization received imageUri:', imageUri);
-  console.log('Image URI type:', typeof imageUri);
-  console.log('Image URI is truthy:', !!imageUri);
-  console.log('Image URI length:', imageUri?.length);
-
-  // Calculate progress and snapping
-  const progressRatio = totalDuration > 0 ? currentTime / totalDuration : 0;
-  const progressPercent = progressRatio * 100;
-
-  const snappedTime = (() => {
-    if (!audioSequence || !audioSequence.segments || audioSequence.segments.length === 0) {
-      return currentTime;
-    }
-    let snapped = 0;
-    for (const segment of audioSequence.segments) {
-      if (currentTime < segment.time) break;
-      snapped = segment.time;
-    }
-    return snapped;
-  })();
-  const snappedRatio = totalDuration > 0 ? snappedTime / totalDuration : 0;
-
-  // Playback cursor position on image
-  const cursorX = imageWidth > 0 ? imageWidth * snappedRatio : 0;
-
-  // Auto-scroll to keep cursor visible
+  // Pulse animation for the active note highlight
+  const pulseAnim = useRef(new Animated.Value(1)).current;
   useEffect(() => {
-    if (!isPlaying || !scrollViewRef.current || imageWidth <= 0 || viewportWidth <= 0) {
+    if (!isPlaying) {
+      pulseAnim.setValue(1);
       return;
     }
-
-    const targetX = Math.max(
-      0,
-      Math.min(
-        imageWidth - viewportWidth,
-        cursorX - viewportWidth * 0.3
-      )
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 0.55, duration: 400, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
+      ])
     );
-    scrollViewRef.current.scrollTo({ x: targetX, animated: true });
-  }, [isPlaying, cursorX, imageWidth, viewportWidth]);
+    loop.start();
+    return () => loop.stop();
+  }, [isPlaying]);
 
-  // Tempo indicator animation
+  // Load natural image dimensions
   useEffect(() => {
-    if (isPlaying) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(animatedValue, {
-            toValue: 1,
-            duration: (60 / tempo) * 1000,
-            useNativeDriver: false,
-          }),
-          Animated.timing(animatedValue, {
-            toValue: 0,
-            duration: 0,
-            useNativeDriver: false,
-          }),
-        ])
-      ).start();
+    if (!imageUri) return;
+    Image.getSize(
+      imageUri,
+      (w, h) => {
+        setImageNaturalWidth(w);
+        setImageNaturalHeight(h);
+      },
+      () => {}
+    );
+  }, [imageUri]);
+
+  // Derive rendered image size: fit width to container, scale height proportionally
+  const aspect =
+    imageNaturalWidth && imageNaturalHeight ? imageNaturalWidth / imageNaturalHeight : 1;
+  const renderWidth = containerWidth || Dimensions.get('window').width;
+  const renderHeight = aspect > 0 ? renderWidth / aspect : 400;
+
+  // Scale factor: image pixel coords → rendered coords
+  const scaleX = imageNaturalWidth > 0 ? renderWidth / imageNaturalWidth : 1;
+  const scaleY = imageNaturalHeight > 0 ? renderHeight / imageNaturalHeight : 1;
+
+  // ─── Cursor computation ───
+  const positions = cursorInfo?.positions || [];
+  const systemBounds = cursorInfo?.systemBounds || [];
+  const xRange = cursorInfo?.xRange || { min: 0, max: 1 };
+  const rangeSpan = Math.max(1, xRange.max - xRange.min);
+
+  // Find the current cursor position by snapping to the latest timing entry
+  let activeIndex = 0;
+  if (positions.length > 0) {
+    for (let i = 0; i < positions.length; i++) {
+      if (currentTime >= positions[i].time) {
+        activeIndex = i;
+      } else {
+        break;
+      }
     }
-  }, [isPlaying, tempo]);
+  }
 
-  const beatScale = animatedValue.interpolate({
-    inputRange: [0, 1],
-    outputRange: [1, 1.5],
-  });
+  const activeEntry = positions[activeIndex] || null;
+  const activeSystemIndex = activeEntry?.systemIndex ?? 0;
+  const activeRatio = activeEntry?.ratio ?? 0;
 
-  const beatOpacity = animatedValue.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: [1, 0.6, 0],
-  });
+  // Cursor X position in rendered coordinates
+  const imageX = xRange.min + activeRatio * rangeSpan;
+  const cursorX = imageX * scaleX;
+
+  // Cursor Y & height: span the active system
+  const system = systemBounds[activeSystemIndex];
+  let cursorTop = 0;
+  let cursorHeight = renderHeight;
+
+  if (system) {
+    const padding = Math.max(4, (system.bottom - system.top) * 0.1);
+    cursorTop = Math.max(0, (system.top - padding) * scaleY);
+    cursorHeight = Math.max(4, (system.bottom - system.top + padding * 2) * scaleY);
+  }
+
+  const clampedX = Math.max(0, Math.min(cursorX, renderWidth - 3));
+
+  // ─── Nearby notes for highlighting ───
+  // Collect all positions that share the same time slot as the active one
+  const highlightedNotes = useMemo(() => {
+    if (!activeEntry || positions.length === 0) return [];
+    const activeTime = activeEntry.time;
+    return positions.filter((p) => Math.abs(p.time - activeTime) < 0.001);
+  }, [activeIndex, positions]);
+
+  // ─── Progress ratio for the horizontal bar ───
+  const progressRatio =
+    totalDuration > 0 ? Math.max(0, Math.min(1, currentTime / totalDuration)) : 0;
+
+  // Auto-scroll to keep active system visible
+  const prevSystemRef = useRef(activeSystemIndex);
+  useEffect(() => {
+    if (!scrollViewRef.current) return;
+    if (activeSystemIndex !== prevSystemRef.current || (isPlaying && system)) {
+      prevSystemRef.current = activeSystemIndex;
+      if (system) {
+        const scrollTarget = Math.max(0, system.top * scaleY - 40);
+        scrollViewRef.current.scrollTo({ y: scrollTarget, animated: true });
+      }
+    }
+  }, [activeSystemIndex, isPlaying]);
+
+  // Should we show the cursor?
+  const showCursor = (isPlaying || currentTime > 0) && positions.length > 0;
+
+  // ─── Tap-to-seek on the sheet image ───
+  const handleSheetPress = useCallback(
+    (evt) => {
+      if (!onSeek || positions.length === 0) return;
+
+      const { locationX, locationY } = evt.nativeEvent;
+
+      // Convert tap coords back to image-space
+      const tapImgX = locationX / scaleX;
+      const tapImgY = locationY / scaleY;
+
+      // Find which system the tap is in
+      let tappedSystemIdx = -1;
+      for (let i = 0; i < systemBounds.length; i++) {
+        const sys = systemBounds[i];
+        const pad = Math.max(10, (sys.bottom - sys.top) * 0.3);
+        if (tapImgY >= sys.top - pad && tapImgY <= sys.bottom + pad) {
+          tappedSystemIdx = i;
+          break;
+        }
+      }
+
+      // Find the nearest position that matches the tapped system (or just nearest overall)
+      let bestIdx = 0;
+      let bestDist = Infinity;
+
+      for (let i = 0; i < positions.length; i++) {
+        const pos = positions[i];
+        // If we identified a system, only consider positions in that system
+        if (tappedSystemIdx >= 0 && pos.systemIndex !== tappedSystemIdx) continue;
+
+        const posImgX = xRange.min + pos.ratio * rangeSpan;
+        const dx = posImgX - tapImgX;
+        const dist = Math.abs(dx);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIdx = i;
+        }
+      }
+
+      // Fallback: if no match in system, find globally closest
+      if (tappedSystemIdx >= 0 && bestDist === Infinity) {
+        for (let i = 0; i < positions.length; i++) {
+          const posImgX = xRange.min + positions[i].ratio * rangeSpan;
+          const dist = Math.abs(posImgX - tapImgX);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestIdx = i;
+          }
+        }
+      }
+
+      onSeek(positions[bestIdx].time);
+    },
+    [onSeek, positions, systemBounds, scaleX, scaleY, xRange, rangeSpan]
+  );
+
+  // ─── Tap on the progress bar ───
+  const handleProgressBarPress = useCallback(
+    (evt) => {
+      if (!onSeek || totalDuration <= 0) return;
+      const { locationX } = evt.nativeEvent;
+      const ratio = Math.max(0, Math.min(1, locationX / renderWidth));
+      onSeek(ratio * totalDuration);
+    },
+    [onSeek, totalDuration, renderWidth]
+  );
 
   return (
-    <View style={styles.container}>
-      {/* Tempo Indicator */}
-      <View style={styles.tempoIndicatorContainer}>
-        <Text style={styles.tempoLabel}>♩ {String(tempo)} BPM</Text>
-        {isPlaying && (
-          <Animated.View
-            style={[
-              styles.tempoIndicator,
-              {
-                transform: [{ scale: isPlaying ? beatScale : 1 }],
-                opacity: isPlaying ? beatOpacity : 1,
-              },
-            ]}
-          >
-            <View style={styles.tempoPulse} />
-          </Animated.View>
-        )}
-      </View>
-
-      {/* Progress Bar */}
-      <View style={styles.progressContainer}>
-        <View style={styles.progressBar}>
-          <View
-            style={[
-              styles.progressFill,
-              { width: `${progressPercent}%` },
-            ]}
-          />
+    <View
+      style={styles.container}
+      onLayout={(e) => {
+        setContainerWidth(e.nativeEvent.layout.width);
+        setContainerHeight(e.nativeEvent.layout.height);
+      }}
+    >
+      {/* ─── Horizontal orange progress bar (scrubber) ─── */}
+      <Pressable onPress={handleProgressBarPress} style={styles.progressBarOuter}>
+        <View style={styles.progressBarTrack}>
+          <View style={[styles.progressBarFill, { width: `${progressRatio * 100}%` }]} />
+          {/* Thumb indicator */}
+          {showCursor && (
+            <View
+              style={[
+                styles.progressThumb,
+                { left: `${progressRatio * 100}%` },
+              ]}
+            />
+          )}
         </View>
-        <Text style={styles.progressText}>
-          {String(Math.floor(currentTime))}s / {String(Math.floor(totalDuration))}s
-        </Text>
-      </View>
+      </Pressable>
 
-      {/* Notes Visualization Grid */}
-      <View style={styles.sheetContainer}>
-        <Text style={styles.vizTitle}>🎵 Sheet Music</Text>
-        
-        {imageUri && imageUri.trim() !== '' ? (
-          <ScrollView
-            ref={scrollViewRef}
-            horizontal
-            showsHorizontalScrollIndicator={true}
-            scrollEventThrottle={16}
-            onLayout={(event) => {
-              setViewportWidth(event.nativeEvent.layout.width);
-            }}
-          >
-            <View style={styles.imageWrapper}>
+      <ScrollView
+        ref={scrollViewRef}
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {imageUri ? (
+          <Pressable onPress={handleSheetPress}>
+            <View style={[styles.imageWrapper, { width: renderWidth, height: renderHeight }]}>
               <Image
                 source={{ uri: imageUri }}
-                style={styles.sheetImage}
-                onLoad={(event) => {
-                  console.log('Image loaded successfully');
-                  const { width, height } = event.nativeEvent.source;
-                  console.log('Image dimensions:', width, 'x', height);
-                  setImageWidth(width);
-                }}
-                onError={(error) => {
-                  console.error('Image failed to load:', error);
-                }}
+                style={{ width: renderWidth, height: renderHeight }}
                 resizeMode="contain"
               />
-              <View
-                style={[
-                  styles.playbackCursor,
-                  { left: cursorX },
-                ]}
-              />
+
+              {/* Note highlights: orange circles on each note at the active time */}
+              {showCursor &&
+                highlightedNotes.map((note, idx) => {
+                  const nImgX = xRange.min + note.ratio * rangeSpan;
+                  const nX = nImgX * scaleX;
+                  const noteSys = systemBounds[note.systemIndex];
+                  const nY = noteSys
+                    ? ((noteSys.top + noteSys.bottom) / 2) * scaleY
+                    : cursorTop + cursorHeight / 2;
+                  const dotSize = Math.max(14, cursorHeight * 0.12);
+
+                  return (
+                    <Animated.View
+                      key={`hl-${idx}`}
+                      style={[
+                        styles.noteHighlight,
+                        {
+                          left: nX - dotSize / 2,
+                          top: nY - dotSize / 2,
+                          width: dotSize,
+                          height: dotSize,
+                          borderRadius: dotSize / 2,
+                          opacity: pulseAnim,
+                        },
+                      ]}
+                    />
+                  );
+                })}
+
+              {/* Vertical cursor bar */}
+              {showCursor && (
+                <View
+                  style={[
+                    styles.cursor,
+                    {
+                      left: clampedX,
+                      top: cursorTop,
+                      height: cursorHeight,
+                    },
+                  ]}
+                />
+              )}
+
+              {/* Faint highlight region behind the cursor on the active system */}
+              {showCursor && system && (
+                <View
+                  style={[
+                    styles.systemHighlight,
+                    {
+                      top: cursorTop,
+                      height: cursorHeight,
+                      width: clampedX,
+                    },
+                  ]}
+                />
+              )}
             </View>
-          </ScrollView>
+          </Pressable>
         ) : (
-          <View style={styles.noImageContainer}>
-            <Text style={styles.noImageText}>⚠️ No sheet image available</Text>
-            <Text style={styles.debugText}>imageUri: {imageUri ? 'present' : 'undefined'}</Text>
-            <Text style={styles.debugText}>imageUri type: {typeof imageUri}</Text>
-            {imageUri && <Text style={styles.debugText} numberOfLines={3}>Value: {imageUri.substring(0, 100)}...</Text>}
+          <View style={styles.noImage}>
+            <Text style={styles.noImageText}>No sheet image</Text>
           </View>
         )}
-      </View>
-
-      {/* Voice Status */}
-      <View style={styles.voiceStatusContainer}>
-        <Text style={styles.voiceStatusTitle}>Active Voices</Text>
-        <View style={styles.voiceStatusRow}>
-          {['Soprano', 'Alto', 'Tenor', 'Bass'].map((voice) => (
-            <View
-              key={voice}
-              style={[
-                styles.voiceStatusBadge,
-                selectedVoices[voice]
-                  ? styles.voiceStatusBadgeActive
-                  : styles.voiceStatusBadgeInactive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.voiceStatusBadgeText,
-                  selectedVoices[voice]
-                    ? styles.voiceStatusBadgeTextActive
-                    : styles.voiceStatusBadgeTextInactive,
-                ]}
-              >
-                {String(voice.charAt(0))}
-              </Text>
-            </View>
-          ))}
-        </View>
-      </View>
-
-      {/* Performance Stats */}
-      <View style={styles.statsContainer}>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Progress</Text>
-          <Text style={styles.statValue}>
-            {String(Math.round(progressPercent))}%
-          </Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Time</Text>
-          <Text style={styles.statValue}>
-            {String(Math.floor(currentTime))}s / {String(Math.floor(totalDuration))}s
-          </Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>Notes</Text>
-          <Text style={styles.statValue}>
-            {String(scoreData.notes.length)}
-          </Text>
-        </View>
-      </View>
+      </ScrollView>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#fafafa',
-    padding: 16,
-    marginBottom: 16,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  tempoIndicatorContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-  },
-  tempoLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#2196F3',
-  },
-  tempoIndicator: {
-    marginLeft: 'auto',
-  },
-  tempoPulse: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: '#FF9800',
-  },
-  progressContainer: {
-    marginBottom: 16,
-  },
-  progressBar: {
-    height: 8,
-    backgroundColor: '#e0e0e0',
-    borderRadius: 4,
-    overflow: 'hidden',
-    marginBottom: 8,
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: '#2196F3',
-    borderRadius: 4,
-  },
-  progressText: {
-    fontSize: 12,
-    color: '#666',
-    textAlign: 'center',
-  },
-  sheetContainer: {
-    marginBottom: 16,
+    flex: 1,
     backgroundColor: '#fff',
-    borderRadius: 8,
-    padding: 12,
   },
-  vizTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 12,
+  /* ─── Progress bar ─── */
+  progressBarOuter: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: '#FAFAF7',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E6E2D8',
+  },
+  progressBarTrack: {
+    height: BAR_HEIGHT,
+    borderRadius: BAR_HEIGHT / 2,
+    backgroundColor: '#E8E4DA',
+    overflow: 'visible',
+    position: 'relative',
+  },
+  progressBarFill: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    height: BAR_HEIGHT,
+    borderRadius: BAR_HEIGHT / 2,
+    backgroundColor: ACCENT,
+  },
+  progressThumb: {
+    position: 'absolute',
+    top: -(10 - BAR_HEIGHT) / 2,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: ACCENT,
+    marginLeft: -5,
+    borderWidth: 2,
+    borderColor: '#fff',
+    elevation: 3,
+    shadowColor: ACCENT,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.4,
+    shadowRadius: 2,
+  },
+  /* ─── Sheet area ─── */
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    alignItems: 'center',
   },
   imageWrapper: {
     position: 'relative',
   },
-  sheetImage: {
-    width: '100%',
-    height: 400,
-  },
-  playbackCursor: {
+  /* ─── Cursor & highlights ─── */
+  cursor: {
     position: 'absolute',
-    top: 0,
-    bottom: 0,
-    width: 4,
-    backgroundColor: '#7B4DFF',
+    width: 3,
+    backgroundColor: ACCENT,
     borderRadius: 2,
     opacity: 0.9,
     zIndex: 10,
   },
-  playbackBar: {
+  systemHighlight: {
     position: 'absolute',
-    top: 0,
-    bottom: 0,
-    width: 4,
-    backgroundColor: '#7B4DFF',
-    borderRadius: 2,
-    opacity: 0.85,
-    zIndex: 2,
+    left: 0,
+    backgroundColor: ACCENT_LIGHT,
+    zIndex: 5,
   },
-  noImageContainer: {
+  noteHighlight: {
+    position: 'absolute',
+    backgroundColor: ACCENT_GLOW,
+    borderWidth: 2,
+    borderColor: ACCENT,
+    zIndex: 11,
+  },
+  noImage: {
     height: 200,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#f5f5f5',
     borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
   },
   noImageText: {
     fontSize: 14,
     color: '#999',
-  },
-  debugText: {
-    fontSize: 11,
-    color: '#666',
-    marginTop: 4,
-    fontFamily: 'monospace',
-  },
-  voiceStatusContainer: {
-    marginBottom: 16,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#e0e0e0',
-  },
-  voiceStatusTitle: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#666',
-    marginBottom: 8,
-  },
-  voiceStatusRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  voiceStatusBadge: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 6,
-    borderWidth: 1,
-  },
-  voiceStatusBadgeActive: {
-    backgroundColor: '#E3F2FD',
-    borderColor: '#2196F3',
-  },
-  voiceStatusBadgeInactive: {
-    backgroundColor: '#f5f5f5',
-    borderColor: '#ddd',
-  },
-  voiceStatusBadgeText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  voiceStatusBadgeTextActive: {
-    color: '#2196F3',
-  },
-  voiceStatusBadgeTextInactive: {
-    color: '#999',
-  },
-  statsContainer: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: '#fff',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 6,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#ddd',
-  },
-  statLabel: {
-    fontSize: 11,
-    color: '#999',
-    marginBottom: 4,
-  },
-  statValue: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#2196F3',
   },
 });

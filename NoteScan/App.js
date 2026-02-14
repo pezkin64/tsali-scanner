@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { StatusBar, View, Text, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { StatusBar, View, Text, ActivityIndicator, TouchableOpacity, Alert } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import * as tf from '@tensorflow/tfjs';
 import '@tensorflow/tfjs-react-native';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { CameraScreen } from './src/screens/CameraScreen';
 import { ModelTestScreen } from './src/screens/ModelTestScreen';
 import { ValidationScreen } from './src/screens/ValidationScreen';
-import { UploadImageScreen } from './src/screens/UploadImageScreen';
-import { MusicScoreScreen } from './src/screens/MusicScoreScreen';
 import { PlaybackScreen } from './src/screens/PlaybackScreen';
 import { ModelService } from './src/services/ModelService';
 
@@ -15,9 +14,7 @@ export default function App() {
   const [tfReady, setTfReady] = useState(false);
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [error, setError] = useState(null);
-  const [currentScreen, setCurrentScreen] = useState('home'); // 'home', 'camera', 'upload-image', 'upload-file', 'settings', 'test', 'validation', 'score', 'playback'
-  const [scoreImageUri, setScoreImageUri] = useState(null);
-  const [scoreData, setScoreData] = useState(null);
+  const [currentScreen, setCurrentScreen] = useState('home'); // 'home', 'camera', 'upload-file', 'settings', 'help', 'library', 'test', 'validation', 'playback'
   const [playbackImageUri, setPlaybackImageUri] = useState(null);
 
   useEffect(() => {
@@ -49,6 +46,62 @@ export default function App() {
     };
   }, []);
 
+  const pickImageFromGallery = async () => {
+    try {
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (!permissionResult.granted) {
+        Alert.alert('Permission Required', 'Permission to access gallery is required!');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 1,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      setPlaybackImageUri(asset.uri);
+      setCurrentScreen('playback');
+    } catch (err) {
+      console.error('Error picking image:', err?.message || err);
+      Alert.alert('Error', 'Failed to pick image. Please try again.');
+    }
+  };
+
+  const pickImageFromCamera = async () => {
+    try {
+      const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+
+      if (!permissionResult.granted) {
+        Alert.alert('Permission Required', 'Permission to access camera is required!');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 1,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      setPlaybackImageUri(asset.uri);
+      setCurrentScreen('playback');
+    } catch (err) {
+      console.error('Error capturing image:', err?.message || err);
+      Alert.alert('Error', 'Failed to capture image. Please try again.');
+    }
+  };
+
   if (!tfReady || !modelsLoaded) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' }}>
@@ -72,14 +125,18 @@ export default function App() {
 
   return (
     <View style={{ flex: 1 }}>
-      <StatusBar barStyle="light-content" backgroundColor="#2196F3" />
+      <StatusBar barStyle="dark-content" backgroundColor="#F9F7F1" />
       {currentScreen === 'home' ? (
-        <HomeScreen onNavigate={setCurrentScreen} />
+        <HomeScreen
+          onNavigate={setCurrentScreen}
+          onPickFromGallery={pickImageFromGallery}
+          onPickFromCamera={pickImageFromCamera}
+        />
       ) : currentScreen === 'camera' ? (
         <CameraScreen 
           onNavigateToScore={(uri) => {
-            setScoreImageUri(uri);
-            setCurrentScreen('score');
+            setPlaybackImageUri(uri);
+            setCurrentScreen('playback');
           }}
           onNavigateToTest={() => setCurrentScreen('test')}
           onNavigateBack={() => setCurrentScreen('home')}
@@ -92,33 +149,10 @@ export default function App() {
         />
       ) : currentScreen === 'validation' ? (
         <ValidationScreen onNavigateBack={() => setCurrentScreen('test')} />
-      ) : currentScreen === 'score' ? (
-        <MusicScoreScreen 
-          imageUri={scoreImageUri}
-          onNavigateBack={() => setCurrentScreen('home')}
-          onNavigateToPlayback={(data, imageUri) => {
-            console.log('📱 App.js: onNavigateToPlayback called');
-            console.log('📱 App.js: Received data:', data?.notes?.length, 'notes');
-            console.log('📱 App.js: Received imageUri:', imageUri);
-            console.log('📱 App.js: imageUri is truthy:', !!imageUri);
-            setScoreData(data);
-            setPlaybackImageUri(imageUri);
-            setCurrentScreen('playback');
-          }}
-        />
       ) : currentScreen === 'playback' ? (
         <PlaybackScreen 
-          scoreData={scoreData}
           imageUri={playbackImageUri}
-          onNavigateBack={() => setCurrentScreen('score')}
-        />
-      ) : currentScreen === 'upload-image' ? (
-        <UploadImageScreen 
           onNavigateBack={() => setCurrentScreen('home')}
-          onNavigateToScore={(uri) => {
-            setScoreImageUri(uri);
-            setCurrentScreen('score');
-          }}
         />
       ) : currentScreen === 'upload-file' ? (
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' }}>
@@ -134,6 +168,22 @@ export default function App() {
       ) : currentScreen === 'settings' ? (
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' }}>
           <Text style={{ fontSize: 18, color: '#333', marginBottom: 20 }}>⚙️ Settings</Text>
+          <Text style={{ fontSize: 14, color: '#666', marginBottom: 20 }}>Coming soon...</Text>
+          <TouchableOpacity onPress={() => setCurrentScreen('home')}>
+            <Text style={{ color: '#2196F3', fontSize: 16 }}>← Back to Home</Text>
+          </TouchableOpacity>
+        </View>
+      ) : currentScreen === 'help' ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' }}>
+          <Text style={{ fontSize: 18, color: '#333', marginBottom: 20 }}>❓ Help</Text>
+          <Text style={{ fontSize: 14, color: '#666', marginBottom: 20 }}>Coming soon...</Text>
+          <TouchableOpacity onPress={() => setCurrentScreen('home')}>
+            <Text style={{ color: '#2196F3', fontSize: 16 }}>← Back to Home</Text>
+          </TouchableOpacity>
+        </View>
+      ) : currentScreen === 'library' ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' }}>
+          <Text style={{ fontSize: 18, color: '#333', marginBottom: 20 }}>🎼 Scanned Music</Text>
           <Text style={{ fontSize: 14, color: '#666', marginBottom: 20 }}>Coming soon...</Text>
           <TouchableOpacity onPress={() => setCurrentScreen('home')}>
             <Text style={{ color: '#2196F3', fontSize: 16 }}>← Back to Home</Text>

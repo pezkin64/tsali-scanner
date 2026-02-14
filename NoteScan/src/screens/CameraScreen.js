@@ -8,10 +8,21 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
+  Platform,
+  StatusBar,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { ModelService } from '../services/ModelService';
 import { ImageProcessor } from '../utils/ImageProcessor';
+
+const palette = {
+  background: '#F9F7F1',
+  surface: '#FBFAF5',
+  surfaceStrong: '#F1EEE4',
+  border: '#D6D0C4',
+  ink: '#3E3C37',
+  inkMuted: '#6E675E',
+};
 
 export const CameraScreen = ({ onNavigateToScore, onNavigateToTest, onNavigateBack }) => {
   const [permission, requestPermission] = useCameraPermissions();
@@ -23,7 +34,8 @@ export const CameraScreen = ({ onNavigateToScore, onNavigateToTest, onNavigateBa
   if (!permission) {
     return (
       <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#2196F3" />
+        <StatusBar barStyle="dark-content" backgroundColor={palette.background} />
+        <ActivityIndicator size="large" color={palette.ink} />
       </View>
     );
   }
@@ -31,6 +43,7 @@ export const CameraScreen = ({ onNavigateToScore, onNavigateToTest, onNavigateBa
   if (!permission.granted) {
     return (
       <View style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor={palette.background} />
         <View style={styles.permissionContainer}>
           <Text style={styles.permissionText}>
             We need camera permission to scan music sheets
@@ -141,6 +154,7 @@ export const CameraScreen = ({ onNavigateToScore, onNavigateToTest, onNavigateBa
   if (capturedImage) {
     return (
       <ScrollView style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor={palette.background} />
         <View style={styles.header}>
           <Text style={styles.title}>Scan Results</Text>
         </View>
@@ -149,7 +163,7 @@ export const CameraScreen = ({ onNavigateToScore, onNavigateToTest, onNavigateBa
 
         {processing ? (
           <View style={styles.processingContainer}>
-            <ActivityIndicator size="large" color="#2196F3" />
+            <ActivityIndicator size="large" color={palette.ink} />
             <Text style={styles.processingText}>Processing image...</Text>
           </View>
         ) : results ? (
@@ -215,6 +229,7 @@ export const CameraScreen = ({ onNavigateToScore, onNavigateToTest, onNavigateBa
 
   return (
     <View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor={palette.background} />
       <View style={styles.header}>
         <TouchableOpacity onPress={onNavigateBack}>
           <Text style={styles.linkText}>← Home</Text>
@@ -251,12 +266,13 @@ export const CameraScreen = ({ onNavigateToScore, onNavigateToTest, onNavigateBa
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: palette.background,
   },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: palette.background,
   },
   permissionContainer: {
     flex: 1,
@@ -268,24 +284,27 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textAlign: 'center',
     marginBottom: 20,
-    color: '#333',
+    color: palette.inkMuted,
   },
   header: {
-    backgroundColor: '#2196F3',
-    padding: 16,
+    paddingHorizontal: 24,
+    paddingBottom: 20,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 32 : 72,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    backgroundColor: palette.background,
   },
   title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#fff',
+    fontSize: 28,
+    fontWeight: '800',
+    color: palette.ink,
+    letterSpacing: -0.4,
   },
   linkText: {
     fontSize: 14,
-    color: '#fff',
-    textDecorationLine: 'underline',
+    color: palette.inkMuted,
+    fontWeight: '600',
   },
   cameraContainer: {
     flex: 1,
@@ -307,22 +326,22 @@ const styles = StyleSheet.create({
     width: 300,
     height: 200,
     borderWidth: 3,
-    borderColor: '#fff',
+    borderColor: palette.surfaceStrong,
     borderRadius: 8,
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
   },
   instructionText: {
-    color: '#fff',
+    color: palette.surface,
     fontSize: 14,
     marginTop: 20,
     textAlign: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(62, 60, 55, 0.7)',
     padding: 8,
     borderRadius: 4,
   },
   controls: {
     height: 120,
-    backgroundColor: '#000',
+    backgroundColor: palette.surfaceStrong,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -330,7 +349,9 @@ const styles = StyleSheet.create({
     width: 70,
     height: 70,
     borderRadius: 35,
-    backgroundColor: '#fff',
+    backgroundColor: palette.surface,
+    borderWidth: 2,
+    borderColor: palette.border,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -338,7 +359,7 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: '#2196F3',
+    backgroundColor: palette.ink,
   },
   previewImage: {
     width: '100%',
@@ -353,56 +374,62 @@ const styles = StyleSheet.create({
   processingText: {
     marginTop: 16,
     fontSize: 16,
-    color: '#666',
+    color: palette.inkMuted,
   },
   resultsContainer: {
-    padding: 16,
+    padding: 20,
   },
   resultCard: {
-    backgroundColor: '#f5f5f5',
+    backgroundColor: palette.surface,
     padding: 16,
-    borderRadius: 8,
-    marginBottom: 16,
+    borderRadius: 14,
+    marginBottom: 12,
+    borderWidth: 2,
+    borderColor: palette.border,
   },
   resultTitle: {
     fontSize: 18,
-    fontWeight: 'bold',
+    fontWeight: '700',
     marginBottom: 8,
-    color: '#333',
+    color: palette.ink,
   },
   resultText: {
     fontSize: 16,
     marginBottom: 4,
-    color: '#555',
+    color: palette.inkMuted,
   },
   resultSubtitle: {
     fontSize: 14,
     fontWeight: '600',
     marginTop: 8,
     marginBottom: 4,
-    color: '#666',
+    color: palette.ink,
   },
   resultDetail: {
     fontSize: 14,
-    color: '#777',
+    color: palette.inkMuted,
     marginLeft: 16,
   },
   buttonContainer: {
-    padding: 16,
+    padding: 20,
     gap: 12,
   },
   button: {
-    backgroundColor: '#2196F3',
-    padding: 16,
-    borderRadius: 8,
+    backgroundColor: palette.surface,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: palette.border,
     alignItems: 'center',
   },
   secondaryButton: {
-    backgroundColor: '#757575',
+    backgroundColor: palette.surface,
   },
   buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
+    color: palette.ink,
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
 });

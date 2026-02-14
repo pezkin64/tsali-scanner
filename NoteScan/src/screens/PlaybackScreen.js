@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,633 +7,560 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
+  Platform,
+  StatusBar,
 } from 'react-native';
-import Slider from '@react-native-community/slider';
-import { Audio } from 'expo-av';
+import { Feather } from '@expo/vector-icons';
 import { AudioPlaybackService } from '../services/AudioPlaybackService';
 import { PlaybackVisualization } from '../components/PlaybackVisualization';
+import { MusicSheetProcessor } from '../services/MusicSheetProcessor';
 
-/**
- * Music playback screen with SATB voice selection and real-time visualization
- */
-export const PlaybackScreen = ({ scoreData, imageUri, onNavigateBack }) => {
+/* ─── Theme ─── */
+const palette = {
+  background: '#F9F7F1',
+  surface: '#FBFAF5',
+  surfaceStrong: '#F1EEE4',
+  border: '#D6D0C4',
+  ink: '#3E3C37',
+  inkMuted: '#6E675E',
+};
+
+const barPalette = {
+  bar: '#1C1B19',
+  barRaised: '#2A2925',
+  barBorder: '#3C3A35',
+  barText: '#F3F1EA',
+  barTextMuted: '#C8C4BA',
+  accent: '#E05A2A',
+};
+
+/* ─── Component ─── */
+export const PlaybackScreen = ({ imageUri, onNavigateBack }) => {
+  /* ── State ── */
+  const [scoreData, setScoreData] = useState(null);
+  const [scoreError, setScoreError] = useState(null);
+  const [processing, setProcessing] = useState(true);
+
   const [isPlaying, setIsPlaying] = useState(false);
-  const [tempo, setTempo] = useState(120);
-  const [currentNote, setCurrentNote] = useState(null);
-  const [playbackPosition, setPlaybackPosition] = useState(0);
-  const [totalDuration, setTotalDuration] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
   const [preparing, setPreparing] = useState(false);
-  
-  console.log('PlaybackScreen received imageUri:', imageUri);
-  
-  const playbackIntervalRef = useRef(null);
-  const shouldStopRef = useRef(false);
+  const [tempo, setTempo] = useState(120);
 
-  const voices = {
+  const [playbackTime, setPlaybackTime] = useState(0); // seconds
+  const [totalDuration, setTotalDuration] = useState(0);
+
+  // Cursor data derived from the audio service
+  const [cursorInfo, setCursorInfo] = useState(null);
+  // { timingMap, systemBounds, xRange: {min, max}, positions (ratio+systemIndex) }
+
+  const audioFileUriRef = useRef(null);
+
+  const [voiceSelection, setVoiceSelection] = useState({
     Soprano: true,
     Alto: true,
     Tenor: true,
     Bass: true,
-  };
+  });
 
-  const [voiceSelection, setVoiceSelection] = useState(voices);
-  const [audioSequence, setAudioSequence] = useState(null);
+  /* ── Process the score image ── */
+  const processScore = useCallback(async () => {
+    if (!imageUri) return;
+    setProcessing(true);
+    setScoreError(null);
+    try {
+      const result = await Promise.race([
+        MusicSheetProcessor.processSheet(imageUri),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('Processing timeout')), 45000)),
+      ]);
+      setScoreData(result);
+    } catch (e) {
+      setScoreError(e?.message || 'Failed to process music sheet');
+    } finally {
+      setProcessing(false);
+    }
+  }, [imageUri]);
 
-  // Initialize audio on mount
   useEffect(() => {
+    processScore();
+  }, [processScore]);
+
+  /* ── Prepare audio when scoreData or voiceSelection changes ── */
+  useEffect(() => {
+    if (!scoreData) return;
     AudioPlaybackService.initAudio();
-    prepareAudioSequence();
-
+    prepareAudio();
     return () => {
-      cleanup();
+      AudioPlaybackService.stop();
     };
-  }, [scoreData, tempo]);
+  }, [scoreData, tempo, voiceSelection]);
 
-  const prepareAudioSequence = async () => {
+  const prepareAudio = async () => {
     setPreparing(true);
     try {
-      // Filter notes by selected voices
-      const filteredNotes = scoreData.notes.filter(
-        (note) => voiceSelection[note.voice]
-      );
-
+      const filteredNotes = scoreData.notes.filter((n) => voiceSelection[n.voice]);
       if (filteredNotes.length === 0) {
-        Alert.alert('No Notes', 'Please select at least one voice');
+        Alert.alert('No Notes', 'Select at least one voice');
         setPreparing(false);
         return;
       }
 
-      console.log('🎵 Preparing audio sequence with', filteredNotes.length, 'notes');
-      const sequence = await AudioPlaybackService.createAudioSequence(
-        filteredNotes,
-        tempo
-      );
+      const { fileUri, timingMap, totalDuration: dur } =
+        await AudioPlaybackService.createCombinedAudio(filteredNotes, tempo);
 
-      setAudioSequence(sequence);
-      setTotalDuration(sequence.totalDuration);
-      setPlaybackPosition(0);
-      console.log('✅ Audio sequence ready');
-    } catch (error) {
-      console.error('Error preparing audio:', error);
-      Alert.alert('Error', 'Failed to prepare audio: ' + error.message);
+      if (!timingMap.length || dur <= 0) {
+        Alert.alert('No playable notes', 'No notes detected for playback.');
+        audioFileUriRef.current = null;
+        setCursorInfo(null);
+        setTotalDuration(0);
+        setPreparing(false);
+        return;
+      }
+
+      audioFileUriRef.current = fileUri;
+      setTotalDuration(dur);
+      setPlaybackTime(0);
+
+      // Build cursor metadata
+      const imgW = scoreData.metadata?.imageWidth || 1;
+      const imgH = scoreData.metadata?.imageHeight || 1;
+
+      // System bounds from metadata
+      const metaSystems = scoreData.metadata?.systems || [];
+      const staffGroups = scoreData.metadata?.staffGroups || [];
+
+      // Use pre-computed systems from metadata; fall back to pairing staff groups
+      let systemBounds;
+      if (metaSystems.length > 0) {
+        systemBounds = metaSystems.map((sys) => ({
+          top: sys.top,
+          bottom: sys.bottom,
+          staffIndices: sys.staffIndices,
+        }));
+      } else {
+        // Fallback: pair adjacent staff groups into systems
+        systemBounds = [];
+        let si = 0;
+        while (si < staffGroups.length) {
+          const a = staffGroups[si];
+          const b = staffGroups[si + 1];
+          const topA = Math.min(...a);
+          const botA = Math.max(...a);
+          if (b) {
+            const topB = Math.min(...b);
+            const botB = Math.max(...b);
+            if (topB - botA < (botA - topA) * 2.5) {
+              systemBounds.push({ top: topA, bottom: botB, staffIndices: [si, si + 1] });
+              si += 2;
+              continue;
+            }
+          }
+          systemBounds.push({ top: topA, bottom: botA, staffIndices: [si] });
+          si += 1;
+        }
+      }
+
+      // Map staffIndex → systemIndex
+      const staffToSystem = new Map();
+      systemBounds.forEach((sys, idx) => {
+        for (const si of sys.staffIndices) staffToSystem.set(si, idx);
+      });
+
+      // Build cursor positions: ratio (0..1 across image width) + systemIndex
+      const xValues = timingMap.map((e) => e.x);
+      const minX = Math.min(...xValues);
+      const maxX = Math.max(...xValues);
+      const rangeX = Math.max(1, maxX - minX);
+
+      const positions = timingMap.map((entry) => {
+        const ratio = (entry.x - minX) / rangeX;
+        const sysIdx = staffToSystem.get(entry.staffIndex) ?? 0;
+        return {
+          time: entry.time,
+          ratio: Math.max(0, Math.min(1, ratio)),
+          systemIndex: sysIdx,
+        };
+      });
+
+      setCursorInfo({
+        positions,
+        systemBounds,
+        imageWidth: imgW,
+        imageHeight: imgH,
+        xRange: { min: minX, max: maxX },
+      });
+
+      console.log(`✅ Audio ready: ${dur.toFixed(1)}s, ${positions.length} cursor positions`);
+    } catch (e) {
+      console.error('prepareAudio error:', e);
+      Alert.alert('Error', 'Failed to prepare audio: ' + e.message);
     } finally {
       setPreparing(false);
     }
   };
 
-  const cleanup = async () => {
-    shouldStopRef.current = true;
-    setIsPlaying(false);
-    if (playbackIntervalRef.current) {
-      clearInterval(playbackIntervalRef.current);
-      playbackIntervalRef.current = null;
-    }
-    await AudioPlaybackService.stopPlayback();
-  };
-
+  /* ── Playback controls ── */
   const handlePlay = async () => {
-    if (!audioSequence) {
-      Alert.alert('Not Ready', 'Audio sequence is not prepared');
+    if (!audioFileUriRef.current) {
+      Alert.alert('Not Ready', 'Audio is still preparing');
       return;
     }
 
-    try {
+    if (isPaused) {
+      await AudioPlaybackService.resume();
       setIsPlaying(true);
-      shouldStopRef.current = false;
-      
-      const startTime = Date.now();
-      const startPosition = playbackPosition;
+      setIsPaused(false);
+      return;
+    }
 
-      // Track playback position with interval
-      playbackIntervalRef.current = setInterval(() => {
-        const elapsed = (Date.now() - startTime) / 1000;
-        const newPosition = startPosition + elapsed;
+    setIsPlaying(true);
+    setIsPaused(false);
+    setPlaybackTime(0);
 
-        if (newPosition >= totalDuration) {
-          setPlaybackPosition(totalDuration);
-          cleanup();
-          return;
+    try {
+      await AudioPlaybackService.play(
+        audioFileUriRef.current,
+        (timeSec) => setPlaybackTime(timeSec),
+        () => {
+          setIsPlaying(false);
+          setIsPaused(false);
+          setPlaybackTime(totalDuration);
         }
-
-        setPlaybackPosition(newPosition);
-
-        // Find current note
-        let currentNoteData = null;
-        for (const segment of audioSequence.segments) {
-          if (
-            newPosition >= segment.time &&
-            newPosition < segment.time + segment.duration
-          ) {
-            currentNoteData = segment;
-            break;
-          }
-        }
-        setCurrentNote(currentNoteData);
-      }, 50); // Update every 50ms
-
-      // Play audio segments sequentially
-      for (let i = 0; i < audioSequence.segments.length; i++) {
-        if (shouldStopRef.current) break;
-        
-        const segment = audioSequence.segments[i];
-
-        // Wait until it's time to play this segment
-        const delay = Math.max(0, (segment.time - startPosition) * 1000 - (Date.now() - startTime));
-        
-        if (delay > 0) {
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        }
-
-        if (shouldStopRef.current) break;
-
-        // Play the note
-        try {
-          const { sound } = await Audio.Sound.createAsync({
-            uri: AudioPlaybackService.audioDataToDataURL(segment.audio),
-          });
-          
-          await sound.playAsync();
-          
-          // Clean up after playing
-          setTimeout(() => {
-            sound.unloadAsync().catch(() => {});
-          }, segment.duration * 1000);
-          
-        } catch (e) {
-          console.warn('Could not play segment:', e);
-        }
-      }
-      
-      // Wait for the last segment to finish
-      if (!shouldStopRef.current) {
-        const remainingTime = (totalDuration - (Date.now() - startTime) / 1000) * 1000;
-        if (remainingTime > 0) {
-          await new Promise((resolve) => setTimeout(resolve, remainingTime));
-        }
-      }
-      
-      if (!shouldStopRef.current) {
-        cleanup();
-      }
-      
-    } catch (error) {
-      console.error('Playback error:', error);
-      Alert.alert('Playback Error', error.message);
-      cleanup();
+      );
+    } catch (e) {
+      console.error('Play error:', e);
+      setIsPlaying(false);
     }
   };
 
   const handlePause = async () => {
-    cleanup();
+    await AudioPlaybackService.pause();
+    setIsPlaying(false);
+    setIsPaused(true);
   };
 
   const handleStop = async () => {
-    await cleanup();
-    setPlaybackPosition(0);
-    setCurrentNote(null);
+    await AudioPlaybackService.stop();
+    setIsPlaying(false);
+    setIsPaused(false);
+    setPlaybackTime(0);
+  };
+
+  const handleSeek = async (timeSec) => {
+    const clamped = Math.max(0, Math.min(timeSec, totalDuration));
+    setPlaybackTime(clamped);
+    await AudioPlaybackService.seekTo(clamped);
   };
 
   const toggleVoice = (voice) => {
-    const updated = { ...voiceSelection, [voice]: !voiceSelection[voice] };
-    setVoiceSelection(updated);
-
-    // Re-prepare audio with new voice selection
-    const anySelected = Object.values(updated).some((v) => v);
-    if (!anySelected) {
-      Alert.alert('Select Voice', 'Please select at least one voice');
-      return;
-    }
+    if (isPlaying) return; // don't change during playback
+    setVoiceSelection((prev) => {
+      const next = { ...prev, [voice]: !prev[voice] };
+      if (!Object.values(next).some(Boolean)) {
+        Alert.alert('Select Voice', 'At least one voice must be selected');
+        return prev;
+      }
+      return next;
+    });
   };
 
-  const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
+  /* ── Render ── */
+  if (processing) {
+    return (
+      <View style={styles.centerContainer}>
+        <StatusBar barStyle="dark-content" backgroundColor={palette.background} />
+        <ActivityIndicator size="large" color={palette.ink} />
+        <Text style={styles.loadingText}>Analyzing score...</Text>
+      </View>
+    );
+  }
 
-  const voiceNotes = Object.keys(voiceSelection).reduce(
-    (acc, voice) => {
-      acc[voice] = scoreData.notes.filter((n) => n.voice === voice).length;
-      return acc;
-    },
-    {}
-  );
+  if (scoreError || !scoreData) {
+    return (
+      <View style={styles.centerContainer}>
+        <StatusBar barStyle="dark-content" backgroundColor={palette.background} />
+        <Text style={styles.errorTitle}>Unable to load score</Text>
+        <Text style={styles.errorText}>{scoreError || 'Unknown error'}</Text>
+        <TouchableOpacity style={styles.retryButton} onPress={processScore}>
+          <Text style={styles.retryButtonText}>Retry</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.retryButton, { marginTop: 10 }]} onPress={onNavigateBack}>
+          <Text style={styles.retryButtonText}>Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor={palette.background} />
+
+      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={onNavigateBack}>
           <Text style={styles.linkText}>← Back</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Playback</Text>
+        <Text style={styles.title}>Score Viewer</Text>
         <View style={{ width: 60 }} />
       </View>
 
-      <ScrollView style={styles.content}>
-        {/* Playback Controls */}
-        <View style={styles.playerCard}>
-          <View style={styles.timeDisplay}>
-            <Text style={styles.timeText}>{String(formatTime(playbackPosition))}</Text>
-            <Text style={styles.durationText}>{String(formatTime(totalDuration))}</Text>
-          </View>
+      {/* Score + cursor */}
+      <View style={styles.viewerArea}>
+        <PlaybackVisualization
+          imageUri={imageUri}
+          currentTime={playbackTime}
+          totalDuration={totalDuration}
+          isPlaying={isPlaying}
+          cursorInfo={cursorInfo}
+          onSeek={handleSeek}
+        />
+      </View>
 
-          {/* Progress Bar */}
-          <View style={styles.progressBarContainer}>
-            <Slider
-              style={styles.progressBar}
-              minimumValue={0}
-              maximumValue={totalDuration}
-              value={playbackPosition}
-              onValueChange={setPlaybackPosition}
-              disabled={isPlaying}
+      {/* Score stats */}
+      <View style={styles.statsBar}>
+        <Text style={styles.statsText}>
+          {scoreData.notes.length} notes • {scoreData.staves} staves
+          {scoreData.metadata?.keySignature ? ` • Key: ${scoreData.metadata.keySignature.type}${scoreData.metadata.keySignature.count > 0 ? ' ' + scoreData.metadata.keySignature.count : ''}` : ''}
+          {totalDuration > 0 ? ` • ${totalDuration.toFixed(1)}s` : ''}
+        </Text>
+      </View>
+
+      {/* Transport bar */}
+      <View style={styles.bottomBar}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.barScroll}
+        >
+          {/* Play / Pause */}
+          <TouchableOpacity
+            style={styles.playPill}
+            onPress={isPlaying ? handlePause : handlePlay}
+            disabled={preparing}
+          >
+            <Feather
+              name={isPlaying ? 'pause' : 'play'}
+              size={14}
+              color={barPalette.barText}
             />
-          </View>
+            <Text style={styles.playPillText}>
+              {preparing ? 'Preparing...' : isPlaying ? 'Pause' : isPaused ? 'Resume' : 'Play'}
+            </Text>
+          </TouchableOpacity>
 
-          {/* Control Buttons */}
-          <View style={styles.controlButtonsRow}>
-            <TouchableOpacity
-              style={[styles.controlButton, styles.playButton]}
-              onPress={handlePlay}
-              disabled={isPlaying || preparing}
-            >
-              <Text style={styles.controlButtonText}>▶ Play</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.controlButton, styles.pauseButton]}
-              onPress={handlePause}
-              disabled={!isPlaying}
-            >
-              <Text style={styles.controlButtonText}>⏸ Pause</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.controlButton, styles.stopButton]}
-              onPress={handleStop}
-            >
-              <Text style={styles.controlButtonText}>⏹ Stop</Text>
-            </TouchableOpacity>
-          </View>
+          {/* Stop */}
+          <TouchableOpacity style={styles.iconPill} onPress={handleStop}>
+            <Feather name="square" size={14} color={barPalette.barText} />
+          </TouchableOpacity>
 
-          {isPlaying && (
-            <View style={styles.playingIndicator}>
-              <Text style={styles.playingText}>🎵 Playing...</Text>
+          {/* Tempo */}
+          <View style={styles.zoomPill}>
+            <Text style={styles.pillText}>{tempo} BPM</Text>
+            <View style={styles.zoomButtons}>
+              <TouchableOpacity
+                style={styles.zoomButton}
+                onPress={() => setTempo((t) => Math.max(40, t - 10))}
+                disabled={isPlaying}
+              >
+                <Text style={styles.pillText}>-</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.zoomButton}
+                onPress={() => setTempo((t) => Math.min(240, t + 10))}
+                disabled={isPlaying}
+              >
+                <Text style={styles.pillText}>+</Text>
+              </TouchableOpacity>
             </View>
-          )}
-
-          {preparing && (
-            <View style={styles.preparingIndicator}>
-              <ActivityIndicator size="small" color="#2196F3" />
-              <Text style={styles.preparingText}>Preparing audio...</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Tempo Control */}
-        <View style={styles.tempoCard}>
-          <Text style={styles.sectionTitle}>Tempo: {String(tempo)} BPM</Text>
-          <Slider
-            style={styles.tempoSlider}
-            minimumValue={60}
-            maximumValue={200}
-            step={5}
-            value={tempo}
-            onValueChange={setTempo}
-            disabled={isPlaying}
-          />
-          <View style={styles.tempoLabels}>
-            <Text style={styles.tempoLabel}>60</Text>
-            <Text style={styles.tempoLabel}>130</Text>
-            <Text style={styles.tempoLabel}>200</Text>
           </View>
-        </View>
 
-        {/* Voice Selection */}
-        <View style={styles.voicesCard}>
-          <Text style={styles.sectionTitle}>🎼 Select Voices to Play</Text>
-          <View style={styles.voiceButtonsRow}>
+          {/* Voice toggles */}
+          <View style={styles.voicePill}>
             {Object.keys(voiceSelection).map((voice) => (
               <TouchableOpacity
                 key={voice}
                 style={[
-                  styles.voiceSelectButton,
-                  voiceSelection[voice]
-                    ? styles.voiceSelectButtonActive
-                    : styles.voiceSelectButtonInactive,
+                  styles.voiceDot,
+                  voiceSelection[voice] ? styles.voiceDotActive : styles.voiceDotInactive,
                 ]}
                 onPress={() => toggleVoice(voice)}
                 disabled={isPlaying}
               >
                 <Text
                   style={[
-                    styles.voiceSelectButtonText,
+                    styles.voiceDotText,
                     voiceSelection[voice]
-                      ? styles.voiceSelectButtonTextActive
-                      : styles.voiceSelectButtonTextInactive,
+                      ? styles.voiceDotTextActive
+                      : styles.voiceDotTextInactive,
                   ]}
                 >
-                  {String(voice.charAt(0))}
-                </Text>
-                <Text style={styles.voiceSelectButtonSubtext}>
-                  {String(voice)}
+                  {voice.charAt(0)}
                 </Text>
               </TouchableOpacity>
             ))}
           </View>
 
-          {/* Voice Notes Count */}
-          <View style={styles.voiceStatsRow}>
-            {Object.keys(voiceSelection).map((voice) => (
-              <View key={voice} style={styles.voiceStat}>
-                <Text style={styles.voiceStatVoice}>{String(voice)}</Text>
-                <Text style={styles.voiceStatCount}>
-                  {String(voiceNotes[voice])}
-                </Text>
-              </View>
-            ))}
+          {/* Progress indicator */}
+          <View style={styles.viewPill}>
+            <Text style={styles.pillText}>
+              {formatTime(playbackTime)} / {formatTime(totalDuration)}
+            </Text>
           </View>
-        </View>
-
-        {/* Visualization */}
-        {audioSequence && (
-          <>
-            {console.log('🎬 PlaybackScreen rendering PlaybackVisualization with imageUri:', imageUri)}
-            <PlaybackVisualization
-              scoreData={scoreData}
-              imageUri={imageUri}
-              isPlaying={isPlaying}
-              currentTime={playbackPosition}
-              totalDuration={totalDuration}
-              selectedVoices={voiceSelection}
-              tempo={tempo}
-              audioSequence={audioSequence}
-            />
-          </>
-        )}
-
-        {/* Score Summary */}
-        <View style={styles.summaryCard}>
-          <Text style={styles.sectionTitle}>Score Summary</Text>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Total Notes:</Text>
-            <Text style={styles.summaryValue}>{String(scoreData.notes.length)}</Text>
-          </View>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Measures:</Text>
-            <Text style={styles.summaryValue}>{String(scoreData.measures.length)}</Text>
-          </View>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Duration (at tempo):</Text>
-            <Text style={styles.summaryValue}>{String(formatTime(totalDuration))}</Text>
-          </View>
-        </View>
-      </ScrollView>
+        </ScrollView>
+      </View>
     </View>
   );
 };
 
+function formatTime(sec) {
+  if (!Number.isFinite(sec) || sec < 0) return '0:00';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s < 10 ? '0' : ''}${s}`;
+}
+
+/* ─── Styles ─── */
 const styles = StyleSheet.create({
-  container: {
+  container: { flex: 1, backgroundColor: palette.background },
+  centerContainer: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+    backgroundColor: palette.background,
+  },
+  loadingText: { marginTop: 16, fontSize: 15, color: palette.inkMuted, fontWeight: '600' },
+  errorTitle: { fontSize: 18, fontWeight: '700', color: palette.ink, marginBottom: 8 },
+  errorText: { fontSize: 13, color: palette.inkMuted, textAlign: 'center', marginBottom: 16 },
+  retryButton: {
+    backgroundColor: palette.surface,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: palette.border,
+  },
+  retryButtonText: {
+    color: palette.ink,
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   header: {
-    backgroundColor: '#2196F3',
-    padding: 16,
+    paddingHorizontal: 24,
+    paddingBottom: 12,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 20 : 36,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    backgroundColor: palette.background,
   },
-  title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  linkText: {
-    fontSize: 14,
-    color: '#fff',
-    textDecorationLine: 'underline',
-  },
-  content: {
+  title: { fontSize: 24, fontWeight: '800', color: palette.ink, letterSpacing: -0.4 },
+  linkText: { fontSize: 14, color: palette.inkMuted, fontWeight: '600' },
+  viewerArea: {
     flex: 1,
-    padding: 16,
-  },
-  playerCard: {
     backgroundColor: '#fff',
+    marginHorizontal: 12,
     borderRadius: 12,
-    padding: 20,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 6,
-    elevation: 4,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#E6E2D8',
   },
-  timeDisplay: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 12,
+  statsBar: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    backgroundColor: palette.surfaceStrong,
+    marginHorizontal: 12,
+    borderBottomLeftRadius: 12,
+    borderBottomRightRadius: 12,
   },
-  timeText: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#2196F3',
-  },
-  durationText: {
-    fontSize: 16,
-    color: '#999',
-  },
-  progressBarContainer: {
-    marginBottom: 16,
-  },
-  progressBar: {
-    height: 4,
-    borderRadius: 2,
-  },
-  controlButtonsRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 12,
-  },
-  controlButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  playButton: {
-    backgroundColor: '#4CAF50',
-  },
-  pauseButton: {
-    backgroundColor: '#FF9800',
-  },
-  stopButton: {
-    backgroundColor: '#f44336',
-  },
-  controlButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  playingIndicator: {
-    backgroundColor: '#E8F5E9',
-    padding: 12,
-    borderRadius: 6,
-    alignItems: 'center',
-  },
-  playingText: {
-    color: '#2E7D32',
-    fontWeight: '600',
-  },
-  preparingIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  preparingText: {
-    fontSize: 14,
-    color: '#666',
-  },
-  tempoCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 12,
-  },
-  tempoSlider: {
-    height: 40,
-    marginBottom: 8,
-  },
-  tempoLabels: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  tempoLabel: {
-    fontSize: 12,
-    color: '#999',
-  },
-  voicesCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  voiceButtonsRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 16,
-  },
-  voiceSelectButton: {
-    flex: 1,
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    borderRadius: 8,
-    alignItems: 'center',
-    borderWidth: 2,
-  },
-  voiceSelectButtonActive: {
-    backgroundColor: '#E3F2FD',
-    borderColor: '#2196F3',
-  },
-  voiceSelectButtonInactive: {
-    backgroundColor: '#f5f5f5',
-    borderColor: '#ddd',
-  },
-  voiceSelectButtonText: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  voiceSelectButtonTextActive: {
-    color: '#2196F3',
-  },
-  voiceSelectButtonTextInactive: {
-    color: '#999',
-  },
-  voiceSelectButtonSubtext: {
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  voiceStatsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingTop: 12,
+  statsText: { fontSize: 11, color: palette.inkMuted, fontWeight: '600', textAlign: 'center' },
+  bottomBar: {
+    backgroundColor: barPalette.bar,
+    paddingVertical: 10,
     borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
+    borderTopColor: barPalette.barBorder,
   },
-  voiceStat: {
-    alignItems: 'center',
-  },
-  voiceStatVoice: {
-    fontSize: 12,
-    color: '#666',
-    marginBottom: 4,
-  },
-  voiceStatCount: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#2196F3',
-  },
-  currentNoteCard: {
-    backgroundColor: '#FFF3E0',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderLeftWidth: 4,
-    borderLeftColor: '#FF9800',
-  },
-  currentNoteTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#E65100',
-    marginBottom: 8,
-  },
-  currentNotePitch: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#FF9800',
-  },
-  summaryCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  summaryRow: {
+  barScroll: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+  },
+  playPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: barPalette.barRaised,
+    borderRadius: 16,
     paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: barPalette.barBorder,
   },
-  summaryLabel: {
-    fontSize: 14,
-    color: '#666',
+  playPillText: { color: barPalette.barText, fontSize: 12, fontWeight: '700' },
+  zoomPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: barPalette.barRaised,
+    borderRadius: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: barPalette.barBorder,
   },
-  summaryValue: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#2196F3',
+  zoomButtons: { flexDirection: 'row', gap: 6 },
+  zoomButton: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: barPalette.barBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: barPalette.bar,
+  },
+  pillText: { color: barPalette.barText, fontSize: 12, fontWeight: '600' },
+  voicePill: {
+    flexDirection: 'row',
+    gap: 6,
+    backgroundColor: barPalette.barRaised,
+    borderRadius: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: barPalette.barBorder,
+  },
+  voiceDot: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  voiceDotActive: { backgroundColor: barPalette.accent, borderColor: barPalette.accent },
+  voiceDotInactive: { backgroundColor: barPalette.bar, borderColor: barPalette.barBorder },
+  voiceDotText: { fontSize: 12, fontWeight: '700' },
+  voiceDotTextActive: { color: barPalette.barText },
+  voiceDotTextInactive: { color: barPalette.barTextMuted },
+  viewPill: {
+    backgroundColor: barPalette.barRaised,
+    borderRadius: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: barPalette.barBorder,
+  },
+  iconPill: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: barPalette.barRaised,
+    borderWidth: 1,
+    borderColor: barPalette.barBorder,
   },
 });

@@ -7,9 +7,22 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
+  Platform,
+  StatusBar,
 } from 'react-native';
 import * as tf from '@tensorflow/tfjs';
 import { ModelService } from '../services/ModelService';
+
+const palette = {
+  background: '#F9F7F1',
+  surface: '#FBFAF5',
+  surfaceStrong: '#F1EEE4',
+  border: '#D6D0C4',
+  ink: '#3E3C37',
+  inkMuted: '#6E675E',
+  success: '#2E6F4E',
+  error: '#8C3A3A',
+};
 
 export const ModelTestScreen = ({ onNavigateToCamera, onNavigateToValidation, onNavigateBack }) => {
   const [loading, setLoading] = useState(true);
@@ -95,7 +108,8 @@ export const ModelTestScreen = ({ onNavigateToCamera, onNavigateToValidation, on
   if (loading) {
     return (
       <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#2196F3" />
+        <StatusBar barStyle="dark-content" backgroundColor={palette.background} />
+        <ActivityIndicator size="large" color={palette.ink} />
         <Text style={styles.loadingText}>Initializing Models...</Text>
       </View>
     );
@@ -103,6 +117,7 @@ export const ModelTestScreen = ({ onNavigateToCamera, onNavigateToValidation, on
 
   return (
     <ScrollView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor={palette.background} />
       <View style={styles.header}>
         <TouchableOpacity onPress={onNavigateBack}>
           <Text style={styles.linkText}>← Home</Text>
@@ -186,139 +201,146 @@ export const ModelTestScreen = ({ onNavigateToCamera, onNavigateToValidation, on
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: palette.background,
   },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: palette.background,
   },
   loadingText: {
     marginTop: 16,
     fontSize: 16,
-    color: '#333',
+    color: palette.inkMuted,
     fontWeight: '500',
   },
   header: {
-    backgroundColor: '#2196F3',
-    padding: 20,
-    paddingTop: 40,
+    paddingHorizontal: 24,
+    paddingBottom: 20,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 32 : 72,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    backgroundColor: palette.background,
   },
   title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#fff',
+    fontSize: 30,
+    fontWeight: '800',
+    color: palette.ink,
+    letterSpacing: -0.4,
   },
   linkText: {
     fontSize: 14,
-    color: '#fff',
-    textDecorationLine: 'underline',
+    color: palette.inkMuted,
+    fontWeight: '600',
   },
   errorContainer: {
     margin: 16,
     padding: 16,
-    backgroundColor: '#ffebee',
-    borderRadius: 8,
-    borderLeftWidth: 4,
-    borderLeftColor: '#f44336',
+    backgroundColor: '#F3E6E3',
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: palette.border,
   },
   errorText: {
-    color: '#c62828',
+    color: palette.error,
     fontSize: 16,
     marginBottom: 12,
   },
   retryButton: {
-    backgroundColor: '#f44336',
+    backgroundColor: palette.surface,
     padding: 12,
-    borderRadius: 6,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: palette.border,
     alignItems: 'center',
   },
   retryButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: 14,
+    color: palette.ink,
+    fontWeight: '700',
+    fontSize: 13,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   successContainer: {
     margin: 16,
     padding: 16,
-    backgroundColor: '#e8f5e9',
-    borderRadius: 8,
-    borderLeftWidth: 4,
-    borderLeftColor: '#4caf50',
+    backgroundColor: '#E7EFE8',
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: palette.border,
   },
   successText: {
-    color: '#2e7d32',
-    fontSize: 18,
-    fontWeight: '600',
+    color: palette.success,
+    fontSize: 16,
+    fontWeight: '700',
     textAlign: 'center',
   },
   section: {
     margin: 16,
   },
   sectionTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#333',
+    fontSize: 18,
+    fontWeight: '700',
+    color: palette.ink,
     marginBottom: 12,
   },
   modelCard: {
-    backgroundColor: '#fff',
+    backgroundColor: palette.surface,
     padding: 16,
-    borderRadius: 8,
+    borderRadius: 14,
     marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    borderWidth: 2,
+    borderColor: palette.border,
   },
   modelName: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#2196F3',
+    color: palette.ink,
     marginBottom: 6,
   },
   label: {
     fontSize: 13,
-    color: '#666',
+    color: palette.inkMuted,
     fontStyle: 'italic',
     marginBottom: 8,
   },
   detail: {
     fontSize: 13,
-    color: '#555',
+    color: palette.inkMuted,
     marginVertical: 4,
     fontFamily: 'monospace',
   },
   testButton: {
-    backgroundColor: '#4caf50',
-    padding: 16,
-    borderRadius: 8,
+    backgroundColor: palette.surface,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: palette.border,
     alignItems: 'center',
     marginTop: 8,
   },
   validationButton: {
-    backgroundColor: '#ff9800',
+    backgroundColor: palette.surface,
   },
   testButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+    color: palette.ink,
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   resultContainer: {
     marginTop: 12,
     padding: 12,
-    backgroundColor: '#e3f2fd',
-    borderRadius: 6,
-    borderLeftWidth: 3,
-    borderLeftColor: '#2196F3',
+    backgroundColor: palette.surfaceStrong,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: palette.border,
   },
   resultText: {
-    color: '#1565c0',
+    color: palette.ink,
     fontSize: 14,
   },
   footer: {
@@ -327,7 +349,7 @@ const styles = StyleSheet.create({
   },
   footerText: {
     fontSize: 16,
-    color: '#666',
+    color: palette.inkMuted,
     fontWeight: '500',
   },
 });
