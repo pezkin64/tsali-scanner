@@ -1,8 +1,11 @@
 import { Audio } from 'expo-av';
 import { File, Paths } from 'expo-file-system/next';
+import { SoundFontService } from './SoundFontService';
 
 /**
  * Piano audio synthesis and playback engine.
+ * Uses SoundFont (.sf2) samples when available for high-quality output.
+ * Falls back to waveform synthesis if the SoundFont is not yet loaded.
  * Generates a single combined WAV written to a temp file (not a data URL).
  * Cursor tracking is driven by onPlaybackStatusUpdate — no manual timers.
  */
@@ -10,6 +13,53 @@ export class AudioPlaybackService {
   static sound = null;
   static isPlaying = false;
   static _tempFileUri = null;
+  static _soundFontReady = false;
+
+  /* ─── SoundFont loading ─── */
+
+  /**
+   * Load the SoundFont file for high-quality instrument playback.
+   * Call this once during app initialization (non-blocking).
+   * Defaults to Grand Piano (first preset in the SF2).
+   * @param {number} sf2Asset - result of require('./SheetMusicScanner.sf2')
+   */
+  static async loadSoundFont(sf2Asset) {
+    try {
+      await SoundFontService.loadSoundFont(sf2Asset);
+      this._soundFontReady = SoundFontService.isLoaded;
+      if (this._soundFontReady) {
+        console.log('🎹 SoundFont loaded — using high-quality samples');
+      }
+    } catch (e) {
+      console.warn('SoundFont load failed, using synthesis fallback:', e);
+      this._soundFontReady = false;
+    }
+  }
+
+  /* ─── Instrument / preset selection ─── */
+
+  /**
+   * Return the list of available instrument presets from the loaded SoundFont.
+   * Each entry: { index, name, preset, bank }
+   */
+  static getAvailablePresets() {
+    if (!this._soundFontReady) return [];
+    return SoundFontService.getAvailablePresets();
+  }
+
+  /** Get the currently active preset index. */
+  static getActivePresetIndex() {
+    return SoundFontService.getActivePresetIndex();
+  }
+
+  /**
+   * Select an instrument preset by index.
+   * Forces re-generation of audio on next prepareAudio call.
+   */
+  static selectPreset(index) {
+    if (!this._soundFontReady) return;
+    SoundFontService.selectPreset(index);
+  }
 
   /* ─── Frequency helpers ─── */
 
@@ -20,9 +70,24 @@ export class AudioPlaybackService {
   /* ─── Waveform generation ─── */
 
   /**
-   * Generate a piano-like note as Float32Array samples (mono 44100 Hz).
+   * Generate a note as Float32Array samples (mono 44100 Hz).
+   * Uses SoundFont samples when available, otherwise falls back to synthesis.
    */
   static generatePianoNote(midiNote, duration = 1.0, velocity = 100) {
+    // Try SoundFont rendering first
+    if (this._soundFontReady) {
+      const sfSample = SoundFontService.renderNote(midiNote, duration, velocity);
+      if (sfSample) return sfSample;
+    }
+
+    // Fallback: waveform synthesis
+    return this._synthesizeNote(midiNote, duration, velocity);
+  }
+
+  /**
+   * Fallback waveform synthesis (used when SoundFont is unavailable).
+   */
+  static _synthesizeNote(midiNote, duration = 1.0, velocity = 100) {
     const frequency = this.midiToFrequency(midiNote);
     const sampleRate = 44100;
     const sampleCount = Math.floor(sampleRate * duration);
@@ -76,6 +141,13 @@ export class AudioPlaybackService {
   static async writeWavToFile(audioData) {
     const sampleRate = 44100;
     const bytesPerSample = 2;
+
+    // Guard: ensure we have actual audio data
+    if (!audioData || audioData.length === 0) {
+      // Create minimum valid WAV (silence) — 0.1 s
+      audioData = new Float32Array(Math.floor(sampleRate * 0.1));
+    }
+
     const subChunk2Size = audioData.length * bytesPerSample;
     const totalBytes = 44 + subChunk2Size;
     const wavBuffer = new ArrayBuffer(totalBytes);
@@ -89,12 +161,12 @@ export class AudioPlaybackService {
     ws(8, 'WAVE');
     ws(12, 'fmt ');
     view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);
-    view.setUint16(22, 1, true);
+    view.setUint16(20, 1, true);      // PCM
+    view.setUint16(22, 1, true);      // mono
     view.setUint32(24, sampleRate, true);
     view.setUint32(28, sampleRate * bytesPerSample, true);
-    view.setUint16(32, bytesPerSample, true);
-    view.setUint16(34, 16, true);
+    view.setUint16(32, bytesPerSample, true);  // block align
+    view.setUint16(34, 16, true);      // bits per sample
     ws(36, 'data');
     view.setUint32(40, subChunk2Size, true);
 
@@ -105,12 +177,18 @@ export class AudioPlaybackService {
       offset += 2;
     }
 
-    // Write raw WAV bytes directly to a temp file using the new File API
+    // Write raw WAV bytes directly to a temp file
     const bytes = new Uint8Array(wavBuffer);
     const fileName = 'notescan_playback_' + Date.now() + '.wav';
     const file = new File(Paths.cache, fileName);
-    file.write(bytes);
+    try {
+      file.write(bytes);
+    } catch (err) {
+      console.error('❌ WAV write error:', err);
+      throw err;
+    }
 
+    console.log(`🎵 WAV file written: ${(totalBytes / 1024).toFixed(0)} KB, ${(audioData.length / sampleRate).toFixed(1)}s`);
     return file.uri;
   }
 
@@ -119,16 +197,30 @@ export class AudioPlaybackService {
   /**
    * Build a single WAV containing all notes with correct timestamps.
    *
-   * @param {Array} notes - sorted voiced notes with midiNote, duration, x, y, staffIndex
-   * @param {number} tempo - BPM
-   * @returns {Promise<{ fileUri: string, timingMap: Array, totalDuration: number }>}
+   * Playback always goes **left to right** by x-position.  Notes at the
+   * same x-position (within 8 px) are simultaneous — all voices sound
+   * together at that beat.  Each individual note renders with its own
+   * duration so that, e.g., a Soprano half-note and an Alto quarter-note
+   * produce the correct lengths.  The cursor advances by the **minimum**
+   * note duration at that position so the next beat event fires on time.
    *
-   * timingMap entries: { time, x, y, staffIndex }
+   * Voice filtering is done by the caller — only the notes passed in
+   * will be heard.
+   *
+   * @param {Array} notes - voiced notes/rests with midiNote, duration, x, y, staffIndex, voice
+   * @param {number} tempo - BPM
+   * @param {Array} [systemsMetadata] - OMR-detected systems: [{ staffIndices: [0,1], ... }]
+   * @returns {Promise<{ fileUri: string, timingMap: Array, totalDuration: number }>}
    */
-  static async createCombinedAudio(notes, tempo = 120) {
+  static async createCombinedAudio(notes, tempo = 120, systemsMetadata = null) {
     const sampleRate = 44100;
     const secondsPerBeat = 60 / tempo;
-    const durationMap = { whole: 4, half: 2, quarter: 1, eighth: 0.5, sixteenth: 0.25 };
+    const durationMap = {
+      whole: 4, half: 2, quarter: 1, eighth: 0.5, sixteenth: 0.25,
+      '32nd': 0.125,
+      dotted_whole: 6, dotted_half: 3, dotted_quarter: 1.5,
+      dotted_eighth: 0.75, dotted_sixteenth: 0.375, dotted_32nd: 0.1875,
+    };
 
     if (!notes || notes.length === 0) {
       return { fileUri: '', timingMap: [], totalDuration: 0 };
@@ -142,20 +234,31 @@ export class AudioPlaybackService {
       return (a.x || 0) - (b.x || 0);
     });
 
-    // Build system mapping: pair adjacent staves into grand-staff systems
-    const staffIndices = [...new Set(sorted.map((n) => n.staffIndex).filter(Number.isFinite))].sort(
-      (a, b) => a - b
-    );
+    // Build system mapping using OMR-detected systems when available.
     const staffToSystem = new Map();
-    let sysIdx = 0;
-    for (let i = 0; i < staffIndices.length; i++) {
-      if (staffToSystem.has(staffIndices[i])) continue;
-      staffToSystem.set(staffIndices[i], sysIdx);
-      if (i + 1 < staffIndices.length && staffIndices[i + 1] === staffIndices[i] + 1) {
-        staffToSystem.set(staffIndices[i + 1], sysIdx);
-        i++;
+    if (systemsMetadata && systemsMetadata.length > 0) {
+      systemsMetadata.forEach((sys, idx) => {
+        for (const si of sys.staffIndices) {
+          staffToSystem.set(si, idx);
+        }
+      });
+    } else {
+      // Fallback: pair adjacent staves into systems (grand staff pairs).
+      // This handles the case where systemsMetadata is not available.
+      // Without metadata, assume consecutive staves form grand staff pairs
+      // (treble + bass), which is the overwhelmingly common case in hymns,
+      // piano music, and choral scores.
+      const staffIndices = [...new Set(sorted.map((n) => n.staffIndex).filter(Number.isFinite))].sort(
+        (a, b) => a - b
+      );
+      let sysIdx = 0;
+      for (let j = 0; j < staffIndices.length; j += 2) {
+        staffToSystem.set(staffIndices[j], sysIdx);
+        if (j + 1 < staffIndices.length) {
+          staffToSystem.set(staffIndices[j + 1], sysIdx);
+        }
+        sysIdx++;
       }
-      sysIdx++;
     }
 
     // Group notes by system
@@ -166,46 +269,84 @@ export class AudioPlaybackService {
       systemNotes.get(sys).push(note);
     }
 
-    // Lay out each system sequentially; within a system, group by x→chords
+    // ------------------------------------------------------------------
+    //  Systems play sequentially.  Within each system, events are laid
+    //  out strictly left-to-right.  Notes at the same x (within 8 px)
+    //  are grouped into a "beat column" — they all start at the same
+    //  time.  Each note keeps its own duration for audio generation.
+    //  The column's advance time = the minimum duration, so the cursor
+    //  moves to the next beat column when the shortest note finishes.
+    // ------------------------------------------------------------------
     const timingMap = [];
-    const chordMeta = []; // lightweight metadata, not audio buffers
+    const chordMeta = []; // { offsetSamples, notes:[{midiNote, dur}] }
     let globalTime = 0;
 
     const systems = [...systemNotes.entries()].sort((a, b) => a[0] - b[0]);
+
+    // ── Diagnostic: log first 20 notes for debugging pitch/duration accuracy ──
+    const allSorted = [...notes].filter(n => n.type !== 'rest').sort((a, b) => {
+      if (a.staffIndex !== b.staffIndex) return a.staffIndex - b.staffIndex;
+      return (a.x || 0) - (b.x || 0);
+    });
+    const preview = allSorted.slice(0, 20).map(n =>
+      `${n.pitch || '?'}${n.midiNote || '?'}(${n.duration || '?'}${n.voice ? ' ' + n.voice[0] : ''})`
+    ).join(' ');
+    console.log(`🎵 First notes: ${preview}`);
+
     for (const [, sysNotes] of systems) {
+      // Sort by x position (left to right)
       sysNotes.sort((a, b) => (a.x || 0) - (b.x || 0));
 
-      // Group into chords (notes within 8px of each other)
-      const chords = [];
-      let chord = [sysNotes[0]];
+      // Group into beat columns (events within 8 px of each other)
+      const columns = [];
+      let col = [sysNotes[0]];
       for (let i = 1; i < sysNotes.length; i++) {
-        if (Math.abs((sysNotes[i].x || 0) - (chord[0].x || 0)) < 8) {
-          chord.push(sysNotes[i]);
+        const curr = sysNotes[i];
+        const anchor = col[0];
+        if (Math.abs((curr.x || 0) - (anchor.x || 0)) < 8) {
+          col.push(curr);
         } else {
-          chords.push(chord);
-          chord = [sysNotes[i]];
+          columns.push(col);
+          col = [curr];
         }
       }
-      chords.push(chord);
+      columns.push(col);
 
-      for (const ch of chords) {
-        const beats = durationMap[ch[0].duration] || 1;
-        const noteDuration = beats * secondsPerBeat;
+      for (const col of columns) {
+        // Separate actual notes from rests
+        const realNotes = col.filter(n => n.type !== 'rest');
+        const isAllRests = realNotes.length === 0;
+
+        // Each event has its own beat-duration
+        const getBeats = (n) => n.tiedBeats || durationMap[n.duration] || 1;
+
+        // Advance time = minimum duration in this column
+        // (this is when the next beat column should start)
+        const minBeats = Math.min(...col.map(getBeats));
+        const advanceDuration = minBeats * secondsPerBeat;
 
         // Average position for cursor placement
-        const avgX = ch.reduce((s, n) => s + (n.x || 0), 0) / ch.length;
-        const avgY = ch.reduce((s, n) => s + (n.y || 0), 0) / ch.length;
-        const si = ch[0].staffIndex;
+        const avgX = col.reduce((s, n) => s + (n.x || 0), 0) / col.length;
+        const avgY = col.reduce((s, n) => s + (n.y || 0), 0) / col.length;
+        const si = col[0].staffIndex;
 
-        timingMap.push({ time: globalTime, x: avgX, y: avgY, staffIndex: si });
-
-        chordMeta.push({
-          offsetSamples: Math.floor(globalTime * sampleRate),
-          notes: ch.map((n) => ({ midiNote: n.midiNote || 60 })),
-          noteDuration,
+        timingMap.push({
+          time: globalTime, x: avgX, y: avgY, staffIndex: si, isRest: isAllRests,
         });
 
-        globalTime += noteDuration;
+        if (!isAllRests) {
+          // Generate audio for each note with its OWN duration
+          const noteEntries = realNotes.map(n => ({
+            midiNote: n.midiNote ?? 60,
+            dur: getBeats(n) * secondsPerBeat,
+          }));
+          chordMeta.push({
+            offsetSamples: Math.floor(globalTime * sampleRate),
+            notes: noteEntries,
+          });
+        }
+
+        globalTime += advanceDuration;
       }
     }
 
@@ -216,18 +357,19 @@ export class AudioPlaybackService {
     const master = new Float32Array(totalSamples);
 
     for (const meta of chordMeta) {
-      const sampleCount = Math.floor(sampleRate * meta.noteDuration);
-
       for (const n of meta.notes) {
-        const noteAudio = this.generatePianoNote(n.midiNote, meta.noteDuration);
+        // Each note renders with its own duration
+        const noteAudio = this.generatePianoNote(n.midiNote, n.dur);
         const start = meta.offsetSamples;
         const len = Math.min(noteAudio.length, totalSamples - start);
         for (let i = 0; i < len; i++) master[start + i] += noteAudio[i];
-        // noteAudio is GC-eligible immediately after this iteration
       }
     }
 
-    // Final normalization
+    // Sanitize: replace any NaN / Infinity with 0, then normalize
+    for (let i = 0; i < master.length; i++) {
+      if (!Number.isFinite(master[i])) master[i] = 0;
+    }
     let masterPeak = 0;
     for (let i = 0; i < master.length; i++) masterPeak = Math.max(masterPeak, Math.abs(master[i]));
     if (masterPeak > 1) for (let i = 0; i < master.length; i++) master[i] /= masterPeak;
@@ -235,8 +377,9 @@ export class AudioPlaybackService {
     // Write to temp file instead of keeping a huge data URL string in memory
     const fileUri = await this.writeWavToFile(master);
 
+    const source = this._soundFontReady ? 'SoundFont' : 'synthesis';
     console.log(
-      `🎹 Combined audio: ${globalTime.toFixed(1)}s, ${timingMap.length} timing points`
+      `🎹 Combined audio (${source}): ${globalTime.toFixed(1)}s, ${timingMap.length} timing points`
     );
 
     return { fileUri, timingMap, totalDuration: globalTime };
@@ -264,26 +407,32 @@ export class AudioPlaybackService {
     await this.stop();
     this._tempFileUri = fileUri;
 
-    const { sound } = await Audio.Sound.createAsync(
-      { uri: fileUri },
-      { shouldPlay: true, progressUpdateIntervalMillis: 50 }
-    );
+    try {
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: fileUri },
+        { shouldPlay: true, progressUpdateIntervalMillis: 50 }
+      );
 
-    this.sound = sound;
-    this.isPlaying = true;
+      this.sound = sound;
+      this.isPlaying = true;
 
-    sound.setOnPlaybackStatusUpdate((status) => {
-      if (!status.isLoaded) return;
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (!status.isLoaded) return;
 
-      if (status.isPlaying && status.positionMillis != null) {
-        if (onPositionUpdate) onPositionUpdate(status.positionMillis / 1000);
-      }
+        if (status.isPlaying && status.positionMillis != null) {
+          if (onPositionUpdate) onPositionUpdate(status.positionMillis / 1000);
+        }
 
-      if (status.didJustFinish) {
-        this.isPlaying = false;
-        if (onFinished) onFinished();
-      }
-    });
+        if (status.didJustFinish) {
+          this.isPlaying = false;
+          if (onFinished) onFinished();
+        }
+      });
+    } catch (err) {
+      console.error('Play error:', err);
+      this.isPlaying = false;
+      if (onFinished) onFinished();
+    }
   }
 
   static async pause() {

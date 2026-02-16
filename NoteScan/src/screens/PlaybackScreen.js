@@ -9,7 +9,10 @@ import {
   Alert,
   Platform,
   StatusBar,
+  Modal,
+  FlatList,
 } from 'react-native';
+import Slider from '@react-native-community/slider';
 import { Feather } from '@expo/vector-icons';
 import { AudioPlaybackService } from '../services/AudioPlaybackService';
 import { PlaybackVisualization } from '../components/PlaybackVisualization';
@@ -45,9 +48,15 @@ export const PlaybackScreen = ({ imageUri, onNavigateBack }) => {
   const [isPaused, setIsPaused] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [tempo, setTempo] = useState(120);
+  const [showTempoSlider, setShowTempoSlider] = useState(false);
 
   const [playbackTime, setPlaybackTime] = useState(0); // seconds
   const [totalDuration, setTotalDuration] = useState(0);
+
+  // Instrument preset selection
+  const [availablePresets, setAvailablePresets] = useState([]);
+  const [selectedPresetIndex, setSelectedPresetIndex] = useState(0);
+  const [showInstrumentPicker, setShowInstrumentPicker] = useState(false);
 
   // Cursor data derived from the audio service
   const [cursorInfo, setCursorInfo] = useState(null);
@@ -82,9 +91,20 @@ export const PlaybackScreen = ({ imageUri, onNavigateBack }) => {
 
   useEffect(() => {
     processScore();
+    // Load SoundFont for high-quality playback (non-blocking)
+    AudioPlaybackService.loadSoundFont(
+      require('../../assets/SheetMusicScanner.sf2')
+    ).then(() => {
+      // Populate available presets after SoundFont loads
+      const presets = AudioPlaybackService.getAvailablePresets();
+      if (presets.length > 0) {
+        setAvailablePresets(presets);
+        setSelectedPresetIndex(0); // default: Grand Piano (first preset)
+      }
+    });
   }, [processScore]);
 
-  /* ── Prepare audio when scoreData or voiceSelection changes ── */
+  /* ── Prepare audio when scoreData, voiceSelection, or instrument changes ── */
   useEffect(() => {
     if (!scoreData) return;
     AudioPlaybackService.initAudio();
@@ -92,20 +112,29 @@ export const PlaybackScreen = ({ imageUri, onNavigateBack }) => {
     return () => {
       AudioPlaybackService.stop();
     };
-  }, [scoreData, tempo, voiceSelection]);
+  }, [scoreData, tempo, voiceSelection, selectedPresetIndex]);
 
   const prepareAudio = async () => {
     setPreparing(true);
     try {
-      const filteredNotes = scoreData.notes.filter((n) => voiceSelection[n.voice]);
-      if (filteredNotes.length === 0) {
+      // Apply selected instrument preset before generating audio
+      AudioPlaybackService.selectPreset(selectedPresetIndex);
+
+      const filteredNotes = scoreData.notes.filter(
+        (n) => n.type === 'rest' || voiceSelection[n.voice]
+      );
+      const hasPlayable = filteredNotes.some((n) => n.type !== 'rest');
+      if (!hasPlayable) {
         Alert.alert('No Notes', 'Select at least one voice');
         setPreparing(false);
         return;
       }
 
+      // Pass OMR-detected systems so the audio engine uses correct staff grouping
+      const systemsMetadata = scoreData.metadata?.systems || null;
+
       const { fileUri, timingMap, totalDuration: dur } =
-        await AudioPlaybackService.createCombinedAudio(filteredNotes, tempo);
+        await AudioPlaybackService.createCombinedAudio(filteredNotes, tempo, systemsMetadata);
 
       if (!timingMap.length || dur <= 0) {
         Alert.alert('No playable notes', 'No notes detected for playback.');
@@ -263,6 +292,16 @@ export const PlaybackScreen = ({ imageUri, onNavigateBack }) => {
     });
   };
 
+  /* ── Instrument selection ── */
+  const handleSelectInstrument = (presetIndex) => {
+    if (isPlaying) return;
+    setSelectedPresetIndex(presetIndex);
+    setShowInstrumentPicker(false);
+  };
+
+  /** Friendly short name for the current preset */
+  const currentInstrumentName = availablePresets[selectedPresetIndex]?.name || 'Piano';
+
   /* ── Render ── */
   if (processing) {
     return (
@@ -318,11 +357,62 @@ export const PlaybackScreen = ({ imageUri, onNavigateBack }) => {
       {/* Score stats */}
       <View style={styles.statsBar}>
         <Text style={styles.statsText}>
-          {scoreData.notes.length} notes • {scoreData.staves} staves
+          {scoreData.notes.filter((n) => n.type !== 'rest').length} notes
+          {scoreData.metadata?.totalRests > 0 ? ` • ${scoreData.metadata.totalRests} rests` : ''}
+          {' • '}{scoreData.staves} staves
           {scoreData.metadata?.keySignature ? ` • Key: ${scoreData.metadata.keySignature.type}${scoreData.metadata.keySignature.count > 0 ? ' ' + scoreData.metadata.keySignature.count : ''}` : ''}
           {totalDuration > 0 ? ` • ${totalDuration.toFixed(1)}s` : ''}
         </Text>
       </View>
+
+      {/* Tempo slider drawer */}
+      {showTempoSlider && !isPlaying && (
+        <View style={styles.tempoDrawer}>
+          <View style={styles.tempoDrawerRow}>
+            <Text style={styles.tempoDrawerLabel}>Tempo</Text>
+            <Text style={styles.tempoDrawerValue}>♩ = {tempo}</Text>
+          </View>
+          <Slider
+            style={styles.tempoSlider}
+            minimumValue={40}
+            maximumValue={240}
+            step={1}
+            value={tempo}
+            onSlidingComplete={(v) => setTempo(Math.round(v))}
+            minimumTrackTintColor={barPalette.accent}
+            maximumTrackTintColor={barPalette.barBorder}
+            thumbTintColor={barPalette.accent}
+          />
+          <View style={styles.tempoPresets}>
+            {[
+              { label: 'Largo',    bpm: 50 },
+              { label: 'Adagio',   bpm: 72 },
+              { label: 'Andante',  bpm: 92 },
+              { label: 'Moderato', bpm: 108 },
+              { label: 'Allegro',  bpm: 132 },
+              { label: 'Presto',   bpm: 180 },
+            ].map((p) => (
+              <TouchableOpacity
+                key={p.label}
+                style={[
+                  styles.tempoPresetBtn,
+                  Math.abs(tempo - p.bpm) < 10 && styles.tempoPresetBtnActive,
+                ]}
+                onPress={() => setTempo(p.bpm)}
+              >
+                <Text
+                  style={[
+                    styles.tempoPresetText,
+                    Math.abs(tempo - p.bpm) < 10 && styles.tempoPresetTextActive,
+                  ]}
+                >
+                  {p.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
 
       {/* Transport bar */}
       <View style={styles.bottomBar}>
@@ -352,26 +442,15 @@ export const PlaybackScreen = ({ imageUri, onNavigateBack }) => {
             <Feather name="square" size={14} color={barPalette.barText} />
           </TouchableOpacity>
 
-          {/* Tempo */}
-          <View style={styles.zoomPill}>
+          {/* Tempo — tap to expand slider */}
+          <TouchableOpacity
+            style={[styles.zoomPill, showTempoSlider && { borderColor: barPalette.accent }]}
+            onPress={() => !isPlaying && setShowTempoSlider((v) => !v)}
+            disabled={isPlaying}
+          >
+            <Feather name="activity" size={12} color={barPalette.barTextMuted} />
             <Text style={styles.pillText}>{tempo} BPM</Text>
-            <View style={styles.zoomButtons}>
-              <TouchableOpacity
-                style={styles.zoomButton}
-                onPress={() => setTempo((t) => Math.max(40, t - 10))}
-                disabled={isPlaying}
-              >
-                <Text style={styles.pillText}>-</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.zoomButton}
-                onPress={() => setTempo((t) => Math.min(240, t + 10))}
-                disabled={isPlaying}
-              >
-                <Text style={styles.pillText}>+</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+          </TouchableOpacity>
 
           {/* Voice toggles */}
           <View style={styles.voicePill}>
@@ -405,8 +484,69 @@ export const PlaybackScreen = ({ imageUri, onNavigateBack }) => {
               {formatTime(playbackTime)} / {formatTime(totalDuration)}
             </Text>
           </View>
+
+          {/* Instrument selector */}
+          {availablePresets.length > 0 && (
+            <TouchableOpacity
+              style={[
+                styles.zoomPill,
+                showInstrumentPicker && { borderColor: barPalette.accent },
+              ]}
+              onPress={() => !isPlaying && setShowInstrumentPicker(true)}
+              disabled={isPlaying}
+            >
+              <Feather name="music" size={12} color={barPalette.barTextMuted} />
+              <Text style={styles.pillText} numberOfLines={1}>
+                {currentInstrumentName}
+              </Text>
+            </TouchableOpacity>
+          )}
         </ScrollView>
       </View>
+
+      {/* Instrument picker modal */}
+      <Modal
+        visible={showInstrumentPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowInstrumentPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Instrument</Text>
+              <TouchableOpacity onPress={() => setShowInstrumentPicker(false)}>
+                <Feather name="x" size={22} color={palette.ink} />
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={availablePresets}
+              keyExtractor={(item) => String(item.index)}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={[
+                    styles.instrumentRow,
+                    item.index === selectedPresetIndex && styles.instrumentRowActive,
+                  ]}
+                  onPress={() => handleSelectInstrument(item.index)}
+                >
+                  <Text
+                    style={[
+                      styles.instrumentName,
+                      item.index === selectedPresetIndex && styles.instrumentNameActive,
+                    ]}
+                  >
+                    {item.name}
+                  </Text>
+                  {item.index === selectedPresetIndex && (
+                    <Feather name="check" size={16} color={barPalette.accent} />
+                  )}
+                </TouchableOpacity>
+              )}
+            />
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -475,6 +615,61 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 12,
   },
   statsText: { fontSize: 11, color: palette.inkMuted, fontWeight: '600', textAlign: 'center' },
+  /* ─── Tempo drawer ─── */
+  tempoDrawer: {
+    backgroundColor: barPalette.barRaised,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: barPalette.barBorder,
+  },
+  tempoDrawerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 2,
+  },
+  tempoDrawerLabel: {
+    color: barPalette.barTextMuted,
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  tempoDrawerValue: {
+    color: barPalette.accent,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  tempoSlider: {
+    width: '100%',
+    height: 32,
+  },
+  tempoPresets: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 4,
+  },
+  tempoPresetBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    backgroundColor: barPalette.bar,
+    borderWidth: 1,
+    borderColor: barPalette.barBorder,
+  },
+  tempoPresetBtnActive: {
+    backgroundColor: barPalette.accent,
+    borderColor: barPalette.accent,
+  },
+  tempoPresetText: {
+    color: barPalette.barTextMuted,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  tempoPresetTextActive: {
+    color: barPalette.barText,
+  },
   bottomBar: {
     backgroundColor: barPalette.bar,
     paddingVertical: 10,
@@ -502,24 +697,13 @@ const styles = StyleSheet.create({
   zoomPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
     backgroundColor: barPalette.barRaised,
     borderRadius: 16,
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderWidth: 1,
     borderColor: barPalette.barBorder,
-  },
-  zoomButtons: { flexDirection: 'row', gap: 6 },
-  zoomButton: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 1,
-    borderColor: barPalette.barBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: barPalette.bar,
   },
   pillText: { color: barPalette.barText, fontSize: 12, fontWeight: '600' },
   voicePill: {
@@ -562,5 +746,55 @@ const styles = StyleSheet.create({
     backgroundColor: barPalette.barRaised,
     borderWidth: 1,
     borderColor: barPalette.barBorder,
+  },
+  /* ─── Instrument picker modal ─── */
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: palette.background,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '60%',
+    paddingBottom: Platform.OS === 'ios' ? 34 : 16,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: palette.border,
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: palette.ink,
+    letterSpacing: -0.3,
+  },
+  instrumentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 13,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: palette.border,
+  },
+  instrumentRowActive: {
+    backgroundColor: palette.surfaceStrong,
+  },
+  instrumentName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: palette.ink,
+    flex: 1,
+  },
+  instrumentNameActive: {
+    color: barPalette.accent,
+    fontWeight: '800',
   },
 });
